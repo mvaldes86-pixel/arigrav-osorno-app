@@ -1,22 +1,27 @@
+// src/app/reportes/page.tsx
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
 /**
- * Reportes (3 tabs):
+ * Reportes (5 tabs):
  * 1) Dashboard Operativo
  * 2) Facturación
  * 3) Producción por día
+ * 4) Camiones / Choferes
+ * 5) Productos  ✅ (nuevo)
  *
- * IMPORTANTE: NO usamos guias.cliente_manual porque en tu BD NO existe.
+ * IMPORTANTE: NO usamos guias.cliente_manual.
  * Trabajamos con cliente_id y join clientes(nombre).
  */
 
-type TabKey = "dashboard" | "facturacion" | "produccion";
+type TabKey = "dashboard" | "facturacion" | "produccion" | "camiones" | "productos";
 
 type GuiaRow = {
   id: string;
   fecha: string | null; // YYYY-MM-DD
   cliente_id: string | null;
+  chofer: string | null;
+  patente: string | null;
   medio_pago: "BANCO_CHILE" | "BANCO_ESTADO" | "EFECTIVO" | "CREDITO" | string | null;
   estado_facturacion: "PENDIENTE" | "PAGADO" | string | null;
   clientes?: { nombre: string } | null;
@@ -75,10 +80,22 @@ function medioPagoLabel(v: string | null) {
   return v;
 }
 
+function normalizeUpper(v: string | null) {
+  if (!v) return "";
+  return String(v).trim().toUpperCase();
+}
+
+function getClientName(g: GuiaRow) {
+  return g.clientes?.nombre ?? "(sin cliente)";
+}
+
+/* ======================
+   DB FETCH
+   ====================== */
 async function fetchGuiasEnRango(desde: string, hasta: string) {
   const { data, error } = await supabase
     .from("guias")
-    .select("id, fecha, cliente_id, medio_pago, estado_facturacion, clientes(nombre)")
+    .select("id, fecha, cliente_id, chofer, patente, medio_pago, estado_facturacion, clientes(nombre)")
     .gte("fecha", desde)
     .lte("fecha", hasta)
     .order("fecha", { ascending: true });
@@ -112,8 +129,25 @@ async function fetchProductosMap(productoIds: string[]) {
   return map;
 }
 
-function getClientName(g: GuiaRow) {
-  return g.clientes?.nombre ?? "(sin cliente)";
+/* ======================
+   UI Helpers
+   ====================== */
+function KPI({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="kpiCard">
+      <div className="kpiLabel">{label}</div>
+      <div className="kpiValue">{value}</div>
+    </div>
+  );
+}
+
+function Bar({ pct }: { pct: number }) {
+  const p = Math.max(0, Math.min(100, pct));
+  return (
+    <div className="bar">
+      <div className="barFill" style={{ width: `${p}%` }} />
+    </div>
+  );
 }
 
 function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string }) {
@@ -145,10 +179,16 @@ function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string
           <Link className={`tab ${tab === "produccion" ? "active" : ""}`} href={mk("produccion")}>
             Producción
           </Link>
+          <Link className={`tab ${tab === "camiones" ? "active" : ""}`} href={mk("camiones")}>
+            Camiones / Choferes
+          </Link>
+          <Link className={`tab ${tab === "productos" ? "active" : ""}`} href={mk("productos")}>
+            Productos
+          </Link>
         </div>
 
         <div className="muted" style={{ marginTop: 10 }}>
-          Tip: si quieres, después agregamos más pestañas (Camiones/Choferes, Productos, Escombrera, etc.) sin tocar el diseño.
+          Tip: después agregamos más pestañas (Clientes avanzado, Escombrera, Proyecciones, etc.) sin romper diseño.
         </div>
       </div>
     </div>
@@ -190,7 +230,13 @@ function RangeBox({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: st
             <Link className="btn" href={`/reportes?tab=${tab}&desde=${toISODate(new Date())}&hasta=${toISODate(new Date())}`}>
               Hoy
             </Link>
-            <Link className="btn" href={`/reportes?tab=${tab}&desde=${addDaysISO(toISODate(new Date()), -1)}&hasta=${addDaysISO(toISODate(new Date()), -1)}`}>
+            <Link
+              className="btn"
+              href={`/reportes?tab=${tab}&desde=${addDaysISO(toISODate(new Date()), -1)}&hasta=${addDaysISO(
+                toISODate(new Date()),
+                -1
+              )}`}
+            >
               Ayer
             </Link>
             <Link className="btn" href={`/reportes?tab=${tab}&desde=${addDaysISO(toISODate(new Date()), -6)}&hasta=${toISODate(new Date())}`}>
@@ -206,24 +252,6 @@ function RangeBox({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: st
   );
 }
 
-function KPI({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="kpiCard">
-      <div className="kpiLabel">{label}</div>
-      <div className="kpiValue">{value}</div>
-    </div>
-  );
-}
-
-function Bar({ pct }: { pct: number }) {
-  const p = Math.max(0, Math.min(100, pct));
-  return (
-    <div className="bar">
-      <div className="barFill" style={{ width: `${p}%` }} />
-    </div>
-  );
-}
-
 /* ======================
    TAB 1: DASHBOARD
    ====================== */
@@ -234,13 +262,10 @@ function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
   const totalM3 = itemsOk.reduce((s, it) => s + safeNum(it.cantidad_m3), 0);
   const guiasCount = guias.length;
 
-  const clientesDistintos = new Set(
-    guias.map((g) => (g.cliente_id ? `ID:${g.cliente_id}` : `TXT:${getClientName(g)}`))
-  ).size;
+  const clientesDistintos = new Set(guias.map((g) => (g.cliente_id ? `ID:${g.cliente_id}` : `TXT:${getClientName(g)}`))).size;
 
   const promM3Guia = guiasCount > 0 ? totalM3 / guiasCount : 0;
 
-  // Top productos por m3
   const prodAgg = new Map<string, number>();
   for (const it of itemsOk) {
     const pid = it.producto_id ?? "";
@@ -252,7 +277,6 @@ function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
     .sort((a, b) => b.m3 - a.m3)
     .slice(0, 5);
 
-  // Top clientes por m3
   const guiaMap = new Map<string, GuiaRow>();
   for (const g of guias) guiaMap.set(g.id, g);
 
@@ -268,7 +292,6 @@ function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
     .sort((a, b) => b.m3 - a.m3)
     .slice(0, 5);
 
-  // Medio de pago (cantidad de guías)
   const mpAgg = new Map<string, number>();
   for (const g of guias) {
     const k = medioPagoLabel(g.medio_pago ?? null);
@@ -281,15 +304,7 @@ function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
   return { totalM3, guiasCount, clientesDistintos, promM3Guia, topProductos, topClientes, mediosPago };
 }
 
-function DashboardTab({
-  desde,
-  hasta,
-  data,
-}: {
-  desde: string;
-  hasta: string;
-  data: ReturnType<typeof buildDashboard>;
-}) {
+function DashboardTab({ desde, hasta, data }: { desde: string; hasta: string; data: ReturnType<typeof buildDashboard> }) {
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <div className="section">
@@ -420,21 +435,18 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
   const guiaMap = new Map<string, GuiaRow>();
   for (const g of guias) guiaMap.set(g.id, g);
 
-  // Totales por cliente
   type CliAgg = { facturado: number; pendiente: number; estado: string };
   const byCliente = new Map<string, CliAgg>();
 
   let totalFacturado = 0;
   let totalPendiente = 0;
 
-  // Conteo de guías por medio de pago (para complementar lo que pediste)
   const mpCount = new Map<string, number>();
   for (const g of guias) {
     const k = medioPagoLabel(g.medio_pago ?? null);
     mpCount.set(k, (mpCount.get(k) ?? 0) + 1);
   }
 
-  // Guías en crédito / por cobrar (conteo)
   const guiasCredito = guias.filter((g) => (g.medio_pago ?? "").toUpperCase() === "CREDITO").length;
 
   for (const it of items) {
@@ -470,15 +482,11 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
   return { totalFacturado, totalPendiente, guiasCredito, tabla, medios };
 }
 
-function FacturacionTab({
-  desde,
-  hasta,
-  data,
-}: {
-  desde: string;
-  hasta: string;
-  data: ReturnType<typeof buildFacturacion>;
-}) {
+function FacturacionTab({ desde, hasta, data }: { desde: string; hasta: string; data: ReturnType<typeof buildFacturacion> }) {
+  const bancoChile = data.medios.find((x) => x.medio === "Banco de Chile")?.guias ?? 0;
+  const bancoEstado = data.medios.find((x) => x.medio === "Banco Estado")?.guias ?? 0;
+  const efectivo = data.medios.find((x) => x.medio === "Efectivo")?.guias ?? 0;
+
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <div className="section">
@@ -494,9 +502,9 @@ function FacturacionTab({
           <KPI label="Total facturado (rango)" value={formatCLP(data.totalFacturado)} />
           <KPI label="Total pendiente" value={formatCLP(data.totalPendiente)} />
           <KPI label="Guías en crédito / por cobrar" value={String(data.guiasCredito)} />
-          <KPI label="Guías Banco Chile" value={String(data.medios.find((x) => x.medio === "Banco de Chile")?.guias ?? 0)} />
-          <KPI label="Guías Banco Estado" value={String(data.medios.find((x) => x.medio === "Banco Estado")?.guias ?? 0)} />
-          <KPI label="Guías Efectivo" value={String(data.medios.find((x) => x.medio === "Efectivo")?.guias ?? 0)} />
+          <KPI label="Guías Banco Chile" value={String(bancoChile)} />
+          <KPI label="Guías Banco Estado" value={String(bancoEstado)} />
+          <KPI label="Guías Efectivo" value={String(efectivo)} />
         </div>
 
         <div className="spacer" />
@@ -538,10 +546,7 @@ function FacturacionTab({
             </table>
 
             <div className="spacer" />
-
-            <div className="muted">
-              Siguiente paso (cuando quieras): exportar CSV y botón “Marcar como facturado” directo desde esta tabla.
-            </div>
+            <div className="muted">Siguiente paso (cuando quieras): exportar CSV y botón “Marcar como facturado”.</div>
           </div>
         </div>
 
@@ -564,16 +569,13 @@ function FacturacionTab({
 }
 
 /* ======================
-   TAB 3: PRODUCCIÓN
+   TAB 3: PRODUCCIÓN POR DÍA
    ====================== */
 function buildProduccionPorDia(guias: GuiaRow[], items: ItemRow[]) {
   const guiaMap = new Map<string, GuiaRow>();
   for (const g of guias) guiaMap.set(g.id, g);
 
-  const byDay = new Map<
-    string,
-    { guiaIds: Set<string>; clientes: Set<string>; m3: number; total: number; pendiente: number }
-  >();
+  const byDay = new Map<string, { guiaIds: Set<string>; clientes: Set<string>; m3: number; total: number; pendiente: number }>();
 
   for (const it of items) {
     const g = guiaMap.get(it.guia_id);
@@ -582,11 +584,9 @@ function buildProduccionPorDia(guias: GuiaRow[], items: ItemRow[]) {
     const fecha = g.fecha ?? "";
     if (!fecha) continue;
 
-    if (!byDay.has(fecha)) {
-      byDay.set(fecha, { guiaIds: new Set(), clientes: new Set(), m3: 0, total: 0, pendiente: 0 });
-    }
-
+    if (!byDay.has(fecha)) byDay.set(fecha, { guiaIds: new Set(), clientes: new Set(), m3: 0, total: 0, pendiente: 0 });
     const agg = byDay.get(fecha)!;
+
     agg.guiaIds.add(g.id);
     agg.clientes.add(getClientName(g));
 
@@ -597,9 +597,7 @@ function buildProduccionPorDia(guias: GuiaRow[], items: ItemRow[]) {
     agg.m3 += m3;
     agg.total += subtotal;
 
-    if ((g.estado_facturacion ?? "").toUpperCase() === "PENDIENTE") {
-      agg.pendiente += subtotal;
-    }
+    if ((g.estado_facturacion ?? "").toUpperCase() === "PENDIENTE") agg.pendiente += subtotal;
   }
 
   const days = Array.from(byDay.entries())
@@ -629,15 +627,7 @@ function buildProduccionPorDia(guias: GuiaRow[], items: ItemRow[]) {
   return { days, totalM3, totalGuias, totalCLP, totalPendiente, best, worst };
 }
 
-function ProduccionTab({
-  desde,
-  hasta,
-  data,
-}: {
-  desde: string;
-  hasta: string;
-  data: ReturnType<typeof buildProduccionPorDia>;
-}) {
+function ProduccionTab({ desde, hasta, data }: { desde: string; hasta: string; data: ReturnType<typeof buildProduccionPorDia> }) {
   const maxM3 = Math.max(1, ...data.days.map((d) => d.m3));
 
   return (
@@ -645,7 +635,7 @@ function ProduccionTab({
       <div className="section">
         <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Producción por día</h2>
         <div className="muted" style={{ marginTop: 6 }}>
-          Tendencia diaria de m³, guías, clientes y $ (total / pendiente) para el rango seleccionado.
+          Tendencia diaria de m³, guías, clientes y $ (total / pendiente)
         </div>
 
         <div className="kpiGrid" style={{ marginTop: 16 }}>
@@ -750,6 +740,338 @@ function ProduccionTab({
 }
 
 /* ======================
+   TAB 4: CAMIONES / CHOFERES
+   ====================== */
+function buildCamionesChoferes(guias: GuiaRow[], items: ItemRow[]) {
+  const guiaMap = new Map<string, GuiaRow>();
+  for (const g of guias) guiaMap.set(g.id, g);
+
+  type TruckAgg = { patente: string; viajes: number; m3: number; choferMain: string; choferCount: Map<string, number> };
+  const byTruck = new Map<string, TruckAgg>();
+
+  type DriverAgg = { chofer: string; viajes: number; m3: number };
+  const byDriver = new Map<string, DriverAgg>();
+
+  // por guía necesitamos total m3 (para sumar 1 vez por viaje)
+  const m3PorGuia = new Map<string, number>();
+  for (const it of items) {
+    m3PorGuia.set(it.guia_id, (m3PorGuia.get(it.guia_id) ?? 0) + safeNum(it.cantidad_m3));
+  }
+
+  for (const g of guias) {
+    const patente = normalizeUpper(g.patente);
+    const chofer = normalizeUpper(g.chofer);
+
+    const viajeM3 = m3PorGuia.get(g.id) ?? 0;
+
+    // TRUCK
+    if (patente) {
+      if (!byTruck.has(patente)) {
+        byTruck.set(patente, { patente, viajes: 0, m3: 0, choferMain: "-", choferCount: new Map() });
+      }
+      const t = byTruck.get(patente)!;
+      t.viajes += 1;
+      t.m3 += viajeM3;
+
+      if (chofer) t.choferCount.set(chofer, (t.choferCount.get(chofer) ?? 0) + 1);
+    }
+
+    // DRIVER
+    if (chofer) {
+      if (!byDriver.has(chofer)) byDriver.set(chofer, { chofer, viajes: 0, m3: 0 });
+      const d = byDriver.get(chofer)!;
+      d.viajes += 1;
+      d.m3 += viajeM3;
+    }
+  }
+
+  // calcular chofer principal por camión
+  for (const t of byTruck.values()) {
+    let best = { name: "-", count: 0 };
+    for (const [name, count] of t.choferCount.entries()) {
+      if (count > best.count) best = { name, count };
+    }
+    t.choferMain = best.name;
+  }
+
+  const trucks = Array.from(byTruck.values())
+    .map((t) => ({
+      patente: t.patente,
+      chofer: t.choferMain,
+      viajes: t.viajes,
+      m3: t.m3,
+      promM3: t.viajes > 0 ? t.m3 / t.viajes : 0,
+    }))
+    .sort((a, b) => b.m3 - a.m3);
+
+  const drivers = Array.from(byDriver.values())
+    .map((d) => ({
+      chofer: d.chofer,
+      viajes: d.viajes,
+      m3: d.m3,
+      promM3: d.viajes > 0 ? d.m3 / d.viajes : 0,
+    }))
+    .sort((a, b) => b.viajes - a.viajes);
+
+  return { trucks, drivers };
+}
+
+function CamionesTab({ desde, hasta, data }: { desde: string; hasta: string; data: ReturnType<typeof buildCamionesChoferes> }) {
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="section">
+        <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Camiones / Choferes</h2>
+        <div className="muted" style={{ marginTop: 6 }}>
+          Rankings operativos del rango seleccionado (normalización automática a MAYÚSCULAS)
+        </div>
+
+        <div className="spacer" />
+
+        <div className="grid2">
+          <div className="cardInner">
+            <div className="cardTitle">Ranking de camiones por m³</div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Patente</th>
+                  <th>Chofer</th>
+                  <th style={{ textAlign: "right" }}>Viajes</th>
+                  <th style={{ textAlign: "right" }}>m³</th>
+                  <th style={{ textAlign: "right" }}>Prom. m³</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.trucks.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="muted" style={{ padding: 14 }}>
+                      Sin datos.
+                    </td>
+                  </tr>
+                ) : (
+                  data.trucks.map((t) => (
+                    <tr key={t.patente}>
+                      <td style={{ fontWeight: 900 }}>{t.patente}</td>
+                      <td>{t.chofer || "-"}</td>
+                      <td style={{ textAlign: "right" }}>{t.viajes}</td>
+                      <td style={{ textAlign: "right", fontWeight: 900 }}>{formatNumber(t.m3, 2)}</td>
+                      <td style={{ textAlign: "right" }}>{formatNumber(t.promM3, 2)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="cardInner">
+            <div className="cardTitle">Ranking de choferes por viajes</div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Chofer</th>
+                  <th style={{ textAlign: "right" }}>Viajes</th>
+                  <th style={{ textAlign: "right" }}>m³</th>
+                  <th style={{ textAlign: "right" }}>Prom. m³</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.drivers.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="muted" style={{ padding: 14 }}>
+                      Sin datos.
+                    </td>
+                  </tr>
+                ) : (
+                  data.drivers.map((d) => (
+                    <tr key={d.chofer}>
+                      <td style={{ fontWeight: 900 }}>{d.chofer}</td>
+                      <td style={{ textAlign: "right" }}>{d.viajes}</td>
+                      <td style={{ textAlign: "right", fontWeight: 900 }}>{formatNumber(d.m3, 2)}</td>
+                      <td style={{ textAlign: "right" }}>{formatNumber(d.promM3, 2)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="spacer" />
+        <div className="row">
+          <Link className="btn" href={`/reportes?tab=produccion&desde=${desde}&hasta=${hasta}`}>
+            Ir a Producción
+          </Link>
+          <Link className="btn" href={`/reportes?tab=productos&desde=${desde}&hasta=${hasta}`}>
+            Ir a Productos
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ======================
+   TAB 5: PRODUCTOS (NUEVO)
+   ====================== */
+function buildProductos(guias: GuiaRow[], items: ItemRow[], productosMap: Map<string, string>) {
+  const guiaMap = new Map<string, GuiaRow>();
+  for (const g of guias) guiaMap.set(g.id, g);
+
+  type ProdAgg = {
+    productoId: string;
+    producto: string;
+    m3: number;
+    totalCLP: number;
+    guiaIds: Set<string>;
+    clientes: Set<string>;
+  };
+
+  const byProd = new Map<string, ProdAgg>();
+
+  for (const it of items) {
+    const pid = it.producto_id ?? "";
+    if (!pid) continue;
+
+    const g = guiaMap.get(it.guia_id);
+    if (!g) continue;
+
+    if (!byProd.has(pid)) {
+      byProd.set(pid, {
+        productoId: pid,
+        producto: productosMap.get(pid) ?? "(producto)",
+        m3: 0,
+        totalCLP: 0,
+        guiaIds: new Set(),
+        clientes: new Set(),
+      });
+    }
+
+    const agg = byProd.get(pid)!;
+    const m3 = safeNum(it.cantidad_m3);
+    const precio = safeNum(it.precio_m3);
+    const subtotal = m3 * precio;
+
+    agg.m3 += m3;
+    agg.totalCLP += subtotal;
+    agg.guiaIds.add(g.id);
+    agg.clientes.add(getClientName(g));
+  }
+
+  const rows = Array.from(byProd.values())
+    .map((p) => {
+      const precioProm = p.m3 > 0 ? p.totalCLP / p.m3 : 0;
+      return {
+        productoId: p.productoId,
+        producto: p.producto,
+        m3: p.m3,
+        totalCLP: p.totalCLP,
+        precioProm,
+        guias: p.guiaIds.size,
+        clientes: p.clientes.size,
+      };
+    })
+    .sort((a, b) => b.m3 - a.m3);
+
+  const totalM3 = rows.reduce((s, r) => s + r.m3, 0);
+  const totalCLP = rows.reduce((s, r) => s + r.totalCLP, 0);
+
+  const top10 = rows.slice(0, 10);
+
+  return { rows, top10, totalM3, totalCLP };
+}
+
+function ProductosTab({ desde, hasta, data }: { desde: string; hasta: string; data: ReturnType<typeof buildProductos> }) {
+  const maxM3 = Math.max(1, ...data.top10.map((r) => r.m3));
+
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="section">
+        <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Productos</h2>
+        <div className="muted" style={{ marginTop: 6 }}>
+          Ranking por producto: m³, $ total, precio promedio ponderado, guías y clientes (todo desde guías, sin planillas)
+        </div>
+
+        <div className="kpiGrid" style={{ marginTop: 16 }}>
+          <KPI label="m³ total (rango)" value={formatNumber(data.totalM3, 2)} />
+          <KPI label="Total $" value={formatCLP(data.totalCLP)} />
+          <KPI label="Productos distintos" value={String(data.rows.length)} />
+          <KPI label="Desde" value={desde} />
+          <KPI label="Hasta" value={hasta} />
+          <KPI label="Top mostrados" value={String(Math.min(10, data.top10.length))} />
+        </div>
+
+        <div className="spacer" />
+
+        <div className="card" style={{ border: "1px solid var(--line)" }}>
+          <div className="toolbar" style={{ borderBottom: "1px solid var(--line)" }}>
+            <div style={{ fontWeight: 900 }}>Top 10 productos por m³</div>
+            <div className="muted">Ordenado por m³ (barra proporcional dentro de la tabla)</div>
+          </div>
+
+          <div className="section" style={{ paddingTop: 10 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th style={{ width: 170 }}>m³</th>
+                  <th style={{ textAlign: "right" }}>Guías</th>
+                  <th style={{ textAlign: "right" }}>Clientes</th>
+                  <th style={{ textAlign: "right" }}>Total $</th>
+                  <th style={{ textAlign: "right" }}>Precio prom. $/m³</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.top10.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="muted" style={{ padding: 14 }}>
+                      No hay datos en este rango.
+                    </td>
+                  </tr>
+                ) : (
+                  data.top10.map((r) => (
+                    <tr key={r.productoId}>
+                      <td style={{ fontWeight: 900 }}>{r.producto}</td>
+                      <td>
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <div style={{ fontWeight: 900 }}>{formatNumber(r.m3, 2)}</div>
+                          <Bar pct={(r.m3 / maxM3) * 100} />
+                        </div>
+                      </td>
+                      <td style={{ textAlign: "right" }}>{r.guias}</td>
+                      <td style={{ textAlign: "right" }}>{r.clientes}</td>
+                      <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.totalCLP)}</td>
+                      <td style={{ textAlign: "right" }}>{formatCLP(r.precioProm)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+
+            <div className="spacer" />
+            <div className="muted">
+              Próximo upgrade (cuando quieras): filtro por cliente + producto (para ver “qué compra cada cliente”).
+            </div>
+          </div>
+        </div>
+
+        <div className="spacer" />
+
+        <div className="row">
+          <Link className="btn" href={`/reportes?tab=facturacion&desde=${desde}&hasta=${hasta}`}>
+            Ir a Facturación
+          </Link>
+          <Link className="btn" href={`/reportes?tab=camiones&desde=${desde}&hasta=${hasta}`}>
+            Ir a Camiones/Choferes
+          </Link>
+          <Link className="btn btnPrimary" href="/guias/nueva">
+            + Nueva guía
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ======================
    MAIN
    ====================== */
 export default async function ReportesPage({
@@ -797,6 +1119,8 @@ export default async function ReportesPage({
   const dashboard = buildDashboard(guias, items, productosMap);
   const facturacion = buildFacturacion(guias, items);
   const produccion = buildProduccionPorDia(guias, items);
+  const camiones = buildCamionesChoferes(guias, items);
+  const productos = buildProductos(guias, items, productosMap);
 
   return (
     <div className="container">
@@ -808,6 +1132,8 @@ export default async function ReportesPage({
       {tab === "dashboard" && <DashboardTab desde={desde} hasta={hasta} data={dashboard} />}
       {tab === "facturacion" && <FacturacionTab desde={desde} hasta={hasta} data={facturacion} />}
       {tab === "produccion" && <ProduccionTab desde={desde} hasta={hasta} data={produccion} />}
+      {tab === "camiones" && <CamionesTab desde={desde} hasta={hasta} data={camiones} />}
+      {tab === "productos" && <ProductosTab desde={desde} hasta={hasta} data={productos} />}
     </div>
   );
 }
