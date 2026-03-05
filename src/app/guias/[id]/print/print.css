@@ -1,0 +1,88 @@
+﻿/* ====== Base layout ====== */
+.appHeader {
+  width: 100%;
+  border-bottom: 1px solid #e6e6e6;
+  background: #fff;
+}
+
+.appHeader__inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand__logo {
+  height: auto;
+  width: auto;
+  max-height: 36px;
+}
+
+.brand__title {
+  font-weight: 800;
+  font-size: 16px;
+  line-height: 1.1;
+}
+
+.brand__subtitle {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+.nav {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.nav__link {
+  text-decoration: none;
+  color: #111;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #eaeaea;
+  background: #fff;
+}
+
+.nav__link:hover {
+  background: #f6f6f6;
+}
+
+.appMain {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 22px 18px 40px;
+}
+
+/* =========================================================
+   PRINT: Ocultar header/nav y cualquier elemento "noPrint"
+   ========================================================= */
+@media print {
+  .noPrint,
+  header.noPrint,
+  .appHeader,
+  .appHeader * {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .appMain {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+}

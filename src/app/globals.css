@@ -1,0 +1,193 @@
+:root{
+  --bg:#f6f8fb;
+  --card:#ffffff;
+  --text:#0b1220;
+  --muted:#5b667a;
+  --line:#e6ebf2;
+  --brand:#0b1220;
+  --radius:14px;
+}
+
+*{ box-sizing:border-box; }
+
+html, body{
+  padding:0;
+  margin:0;
+  font-family: Arial, Helvetica, sans-serif;
+  color:var(--text);
+  background:var(--bg);
+}
+
+a{ color:#1f4aa8; text-decoration:none; }
+a:hover{ text-decoration:underline; }
+
+.container{
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 22px 18px;
+}
+
+.card{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 26px rgba(14, 22, 40, 0.06);
+}
+
+.header{
+  position: sticky;
+  top:0;
+  z-index: 50;
+  background: rgba(255,255,255,0.92);
+  backdrop-filter: blur(10px);
+  border-bottom:1px solid var(--line);
+}
+
+.headerInner{
+  max-width:1100px;
+  margin:0 auto;
+  padding: 14px 18px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+}
+
+.brand{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  min-width: 240px;
+}
+
+.brandLogo{
+  width: 90px;
+  height: auto;
+  display:block;
+}
+
+.brandText{
+  display:flex;
+  flex-direction:column;
+  line-height:1.1;
+}
+
+.brandTitle{
+  font-weight:800;
+  letter-spacing:0.2px;
+}
+
+.brandSub{
+  font-size:12px;
+  color:var(--muted);
+  margin-top:2px;
+}
+
+.nav{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.nav a{
+  display:inline-flex;
+  align-items:center;
+  padding: 9px 14px;
+  border:1px solid var(--line);
+  border-radius: 12px;
+  background:#fff;
+  color:var(--text);
+  font-weight:700;
+}
+
+.nav a.active{
+  background: #e9eefb;
+  border-color:#cdd8f6;
+}
+
+.pageTitle{
+  font-size: 42px;
+  margin: 10px 0 10px;
+  font-weight: 900;
+}
+
+.toolbar{
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.section{
+  padding: 16px;
+}
+
+.table{
+  width:100%;
+  border-collapse: collapse;
+  overflow:hidden;
+  border-radius: 12px;
+}
+
+.table th{
+  text-align:left;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--line);
+  background: #fafbfd;
+}
+
+.table td{
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.badgeLink{
+  font-weight:800;
+}
+
+input, select, button{
+  font: inherit;
+}
+
+.input, .select{
+  border:1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background:#fff;
+}
+
+.btn{
+  border:1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 800;
+  cursor:pointer;
+  background:#fff;
+}
+
+.btnPrimary{
+  background:#0b1220;
+  color:#fff;
+  border-color:#0b1220;
+}
+
+.btnGhost{
+  background:transparent;
+}
+
+.muted{
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.row{
+  display:flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items:center;
+}
+
+.spacer{
+  height: 12px;
+}
