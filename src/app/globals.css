@@ -191,3 +191,60 @@ input, select, button{
 .spacer{
   height: 12px;
 }
+
+/* ====== EXTRA PARA REPORTES (NO rompe el resto) ====== */
+
+.tabs{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.tab{
+  display:inline-flex;
+  align-items:center;
+  padding: 10px 14px;
+  border:1px solid var(--line);
+  border-radius: 12px;
+  background:#fff;
+  color:var(--text);
+  font-weight:900;
+  text-decoration:none;
+}
+
+.tab:hover{
+  text-decoration:none;
+}
+
+.grid4{
+  display:grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.grid3{
+  display:grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.kpi{
+  padding: 14px 16px;
+}
+
+.kpiLabel{
+  color: var(--muted);
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.kpiValue{
+  font-size: 28px;
+  font-weight: 900;
+  margin-top: 6px;
+}
+
+@media (max-width: 980px){
+  .grid4{ grid-template-columns: 1fr 1fr; }
+  .grid3{ grid-template-columns: 1fr; }
+}
