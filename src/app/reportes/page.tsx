@@ -2,13 +2,14 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
 /**
- * Reportes (6 tabs):
+ * Reportes (7 tabs):
  * 1) Dashboard Operativo
  * 2) Facturación
  * 3) Producción por día
  * 4) Camiones / Choferes
  * 5) Productos
  * 6) Clientes
+ * 7) Cobranza (Aging)
  *
  * IMPORTANTE:
  * - NO usamos guias.cliente_manual (no existe en tu BD)
@@ -21,7 +22,8 @@ type TabKey =
   | "produccion"
   | "camiones"
   | "productos"
-  | "clientes";
+  | "clientes"
+  | "cobranza";
 
 type GuiaRow = {
   id: string;
@@ -29,7 +31,6 @@ type GuiaRow = {
   cliente_id: string | null;
   clientes?: { nombre: string } | null;
 
-  // Para reportes varios
   medio_pago:
     | "BANCO_CHILE"
     | "BANCO_ESTADO"
@@ -40,7 +41,6 @@ type GuiaRow = {
 
   estado_facturacion: "PENDIENTE" | "PAGADO" | string | null;
 
-  // Para camiones/choferes
   chofer: string | null;
   patente: string | null;
 };
@@ -102,13 +102,10 @@ function medioPagoLabel(v: string | null) {
   return v;
 }
 
-// Normalización “suave” (sin DB): para que ranking no se duplique por may/min y espacios
+// Normalización “suave” (sin DB)
 function normName(v: string | null) {
   if (!v) return "";
-  return v
-    .trim()
-    .replace(/\s+/g, " ")
-    .toUpperCase();
+  return v.trim().replace(/\s+/g, " ").toUpperCase();
 }
 
 function normPatente(v: string | null) {
@@ -118,6 +115,35 @@ function normPatente(v: string | null) {
 
 function getClientName(g: GuiaRow) {
   return g.clientes?.nombre ?? "(sin cliente)";
+}
+
+// Diferencia en días entre hoy y la fecha YYYY-MM-DD (sin TZ rara)
+function daysAgo(fechaISO: string) {
+  const start = new Date(`${fechaISO}T00:00:00`);
+  const today = new Date();
+  const end = new Date(`${toISODate(today)}T00:00:00`);
+  const diff = end.getTime() - start.getTime();
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  return Number.isFinite(days) ? days : 0;
+}
+
+type AgingBucketKey = "0_7" | "8_15" | "16_30" | "31_plus" | "sin_fecha";
+
+function bucketLabel(k: AgingBucketKey) {
+  if (k === "0_7") return "0–7 días";
+  if (k === "8_15") return "8–15 días";
+  if (k === "16_30") return "16–30 días";
+  if (k === "31_plus") return "+30 días";
+  return "Sin fecha";
+}
+
+function getBucketFromGuiaFecha(fecha: string | null): AgingBucketKey {
+  if (!fecha) return "sin_fecha";
+  const d = daysAgo(fecha);
+  if (d <= 7) return "0_7";
+  if (d <= 15) return "8_15";
+  if (d <= 30) return "16_30";
+  return "31_plus";
 }
 
 /* ======================
@@ -176,9 +202,7 @@ function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string
     <div className="reportsTop card">
       <div className="toolbar">
         <div>
-          <div style={{ fontWeight: 900, fontSize: 16 }}>
-            Selecciona el tipo de reporte
-          </div>
+          <div style={{ fontWeight: 900, fontSize: 16 }}>Selecciona el tipo de reporte</div>
           <div className="muted">Reportes base del Plan Control Operativo</div>
         </div>
 
@@ -194,35 +218,23 @@ function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string
           <Link className={`tab ${tab === "dashboard" ? "active" : ""}`} href={mk("dashboard")}>
             Dashboard
           </Link>
-          <Link
-            className={`tab ${tab === "facturacion" ? "active" : ""}`}
-            href={mk("facturacion")}
-          >
+          <Link className={`tab ${tab === "facturacion" ? "active" : ""}`} href={mk("facturacion")}>
             Facturación
           </Link>
-          <Link
-            className={`tab ${tab === "produccion" ? "active" : ""}`}
-            href={mk("produccion")}
-          >
+          <Link className={`tab ${tab === "produccion" ? "active" : ""}`} href={mk("produccion")}>
             Producción
           </Link>
-          <Link
-            className={`tab ${tab === "camiones" ? "active" : ""}`}
-            href={mk("camiones")}
-          >
+          <Link className={`tab ${tab === "camiones" ? "active" : ""}`} href={mk("camiones")}>
             Camiones / Choferes
           </Link>
-          <Link
-            className={`tab ${tab === "productos" ? "active" : ""}`}
-            href={mk("productos")}
-          >
+          <Link className={`tab ${tab === "productos" ? "active" : ""}`} href={mk("productos")}>
             Productos
           </Link>
-          <Link
-            className={`tab ${tab === "clientes" ? "active" : ""}`}
-            href={mk("clientes")}
-          >
+          <Link className={`tab ${tab === "clientes" ? "active" : ""}`} href={mk("clientes")}>
             Clientes
+          </Link>
+          <Link className={`tab ${tab === "cobranza" ? "active" : ""}`} href={mk("cobranza")}>
+            Cobranza (Aging)
           </Link>
         </div>
 
@@ -338,7 +350,6 @@ function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
 
   const promM3Guia = guiasCount > 0 ? totalM3 / guiasCount : 0;
 
-  // Top productos por m3
   const prodAgg = new Map<string, number>();
   for (const it of itemsOk) {
     const pid = it.producto_id ?? "";
@@ -350,7 +361,6 @@ function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
     .sort((a, b) => b.m3 - a.m3)
     .slice(0, 5);
 
-  // Top clientes por m3
   const guiaMap = new Map<string, GuiaRow>();
   for (const g of guias) guiaMap.set(g.id, g);
 
@@ -366,7 +376,6 @@ function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
     .sort((a, b) => b.m3 - a.m3)
     .slice(0, 5);
 
-  // Medio de pago (cantidad de guías)
   const mpAgg = new Map<string, number>();
   for (const g of guias) {
     const k = medioPagoLabel(g.medio_pago ?? null);
@@ -401,6 +410,8 @@ function DashboardTab({
           <KPI label="Guías" value={String(data.guiasCount)} />
           <KPI label="Clientes atendidos" value={String(data.clientesDistintos)} />
           <KPI label="Promedio m³ / guía" value={formatNumber(data.promM3Guia, 2)} />
+          <KPI label="Desde" value={desde} />
+          <KPI label="Hasta" value={hasta} />
         </div>
 
         <div className="spacer" />
@@ -426,9 +437,7 @@ function DashboardTab({
                   data.topProductos.map((r, i) => (
                     <tr key={i}>
                       <td>{r.producto}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>
-                        {formatNumber(r.m3, 2)}
-                      </td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
                     </tr>
                   ))
                 )}
@@ -456,9 +465,7 @@ function DashboardTab({
                   data.topClientes.map((r, i) => (
                     <tr key={i}>
                       <td>{r.cliente}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>
-                        {formatNumber(r.m3, 2)}
-                      </td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
                     </tr>
                   ))
                 )}
@@ -526,7 +533,6 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
   let totalFacturado = 0;
   let totalPendiente = 0;
 
-  // Conteo de guías por medio de pago
   const mpCount = new Map<string, number>();
   for (const g of guias) {
     const k = medioPagoLabel(g.medio_pago ?? null);
@@ -543,7 +549,8 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
     const cliente = getClientName(g);
     const subtotal = safeNum(it.cantidad_m3) * safeNum(it.precio_m3);
 
-    if (!byCliente.has(cliente)) byCliente.set(cliente, { facturado: 0, pendiente: 0, estado: "Pendiente" });
+    if (!byCliente.has(cliente))
+      byCliente.set(cliente, { facturado: 0, pendiente: 0, estado: "Pendiente" });
     const agg = byCliente.get(cliente)!;
 
     const est = String(g.estado_facturacion ?? "").toUpperCase();
@@ -573,7 +580,6 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
     totalPendiente,
     guiasCredito,
     tabla,
-    medios,
     bancoChile: getCount("Banco de Chile"),
     bancoEstado: getCount("Banco Estado"),
     efectivo: getCount("Efectivo"),
@@ -614,9 +620,7 @@ function FacturacionTab({
         <div className="card" style={{ border: "1px solid var(--line)" }}>
           <div className="toolbar" style={{ borderBottom: "1px solid var(--line)" }}>
             <div style={{ fontWeight: 900 }}>Resumen por cliente</div>
-            <div className="muted">
-              Calculado como suma de (m³ * precio por m³) en los items de cada guía.
-            </div>
+            <div className="muted">Calculado como suma de (m³ * precio por m³) en los items de cada guía.</div>
           </div>
 
           <div className="section" style={{ paddingTop: 10 }}>
@@ -640,12 +644,8 @@ function FacturacionTab({
                   data.tabla.map((r) => (
                     <tr key={r.cliente}>
                       <td style={{ fontWeight: 900 }}>{r.cliente}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>
-                        {formatCLP(r.facturado)}
-                      </td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>
-                        {formatCLP(r.pendiente)}
-                      </td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.facturado)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.pendiente)}</td>
                       <td style={{ fontWeight: 900 }}>{r.estado}</td>
                     </tr>
                   ))
@@ -655,9 +655,7 @@ function FacturacionTab({
 
             <div className="spacer" />
 
-            <div className="muted">
-              Siguiente paso (cuando quieras): exportar CSV y botón “Marcar como facturado” desde esta tabla.
-            </div>
+            <div className="muted">Siguiente paso (cuando quieras): exportar CSV y botón “Marcar como facturado”.</div>
           </div>
         </div>
 
@@ -882,7 +880,6 @@ function buildCamionesChoferes(guias: GuiaRow[], items: ItemRow[]) {
   const totalGuias = guias.length;
   const promM3Viaje = totalGuias > 0 ? totalM3 / totalGuias : 0;
 
-  // Ranking Camiones (por patente) + chofer principal
   type CamAgg = { patente: string; m3: number; viajes: number; choferCounts: Map<string, number> };
   const byPatente = new Map<string, CamAgg>();
 
@@ -896,7 +893,10 @@ function buildCamionesChoferes(guias: GuiaRow[], items: ItemRow[]) {
     byPatente.get(pat)!.viajes += 1;
 
     const ch = normName(g.chofer);
-    if (ch) byPatente.get(pat)!.choferCounts.set(ch, (byPatente.get(pat)!.choferCounts.get(ch) ?? 0) + 1);
+    if (ch)
+      byPatente
+        .get(pat)!
+        .choferCounts.set(ch, (byPatente.get(pat)!.choferCounts.get(ch) ?? 0) + 1);
   }
 
   for (const it of items) {
@@ -927,7 +927,6 @@ function buildCamionesChoferes(guias: GuiaRow[], items: ItemRow[]) {
     })
     .sort((a, b) => b.m3 - a.m3);
 
-  // Ranking Choferes por viajes
   type ChoAgg = { chofer: string; viajes: number; m3: number };
   const byChofer = new Map<string, ChoAgg>();
 
@@ -958,11 +957,7 @@ function buildCamionesChoferes(guias: GuiaRow[], items: ItemRow[]) {
   return { totalM3, totalGuias, promM3Viaje, rankingCamiones, rankingChoferes };
 }
 
-function CamionesTab({
-  data,
-}: {
-  data: ReturnType<typeof buildCamionesChoferes>;
-}) {
+function CamionesTab({ data }: { data: ReturnType<typeof buildCamionesChoferes> }) {
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <div className="section">
@@ -1046,9 +1041,7 @@ function CamionesTab({
             </table>
 
             <div className="spacer" />
-            <div className="muted">
-              Nota: normalizamos chofer/patente en mayúscula para evitar duplicados.
-            </div>
+            <div className="muted">Nota: normalizamos chofer/patente en mayúscula para evitar duplicados.</div>
           </div>
         </div>
       </div>
@@ -1066,14 +1059,7 @@ function buildProductos(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
   const totalM3 = items.reduce((s, it) => s + safeNum(it.cantidad_m3), 0);
   const totalCLP = items.reduce((s, it) => s + safeNum(it.cantidad_m3) * safeNum(it.precio_m3), 0);
 
-  type ProdAgg = {
-    producto: string;
-    m3: number;
-    guias: Set<string>;
-    clientes: Set<string>;
-    totalCLP: number;
-  };
-
+  type ProdAgg = { producto: string; m3: number; guias: Set<string>; clientes: Set<string>; totalCLP: number };
   const byProd = new Map<string, ProdAgg>();
 
   for (const it of items) {
@@ -1082,13 +1068,7 @@ function buildProductos(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
     const key = `${pid}:${nombre}`;
 
     if (!byProd.has(key)) {
-      byProd.set(key, {
-        producto: nombre,
-        m3: 0,
-        guias: new Set(),
-        clientes: new Set(),
-        totalCLP: 0,
-      });
+      byProd.set(key, { producto: nombre, m3: 0, guias: new Set(), clientes: new Set(), totalCLP: 0 });
     }
 
     const g = guiaMap.get(it.guia_id);
@@ -1114,14 +1094,7 @@ function buildProductos(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
     }))
     .sort((a, b) => b.m3 - a.m3);
 
-  const productosDistintos = rows.length;
-
-  return {
-    totalM3,
-    totalCLP,
-    productosDistintos,
-    top10: rows.slice(0, 10),
-  };
+  return { totalM3, totalCLP, productosDistintos: rows.length, top10: rows.slice(0, 10) };
 }
 
 function ProductosTab({
@@ -1157,7 +1130,7 @@ function ProductosTab({
         <div className="card" style={{ border: "1px solid var(--line)" }}>
           <div className="toolbar" style={{ borderBottom: "1px solid var(--line)" }}>
             <div style={{ fontWeight: 900 }}>Top 10 productos por m³</div>
-            <div className="muted">Ordenado por m³ (barra proporcional dentro de la tabla)</div>
+            <div className="muted">Ordenado por m³ (barra proporcional)</div>
           </div>
 
           <div className="section" style={{ paddingTop: 10 }}>
@@ -1200,9 +1173,7 @@ function ProductosTab({
             </table>
 
             <div className="spacer" />
-            <div className="muted">
-              Próximo upgrade: filtro por cliente + producto (para ver “qué compra cada cliente”).
-            </div>
+            <div className="muted">Próximo upgrade: filtro por cliente + producto (“qué compra cada cliente”).</div>
 
             <div className="spacer" />
 
@@ -1231,14 +1202,7 @@ function buildClientes(guias: GuiaRow[], items: ItemRow[], productosMap: Map<str
   const guiaMap = new Map<string, GuiaRow>();
   for (const g of guias) guiaMap.set(g.id, g);
 
-  type CliAgg = {
-    cliente: string;
-    m3: number;
-    totalCLP: number;
-    guiaIds: Set<string>;
-    productos: Set<string>;
-  };
-
+  type CliAgg = { cliente: string; m3: number; totalCLP: number; guiaIds: Set<string>; productos: Set<string> };
   const byCliente = new Map<string, CliAgg>();
 
   for (const it of items) {
@@ -1248,20 +1212,13 @@ function buildClientes(guias: GuiaRow[], items: ItemRow[], productosMap: Map<str
     const cliente = getClientName(g);
 
     if (!byCliente.has(cliente)) {
-      byCliente.set(cliente, {
-        cliente,
-        m3: 0,
-        totalCLP: 0,
-        guiaIds: new Set(),
-        productos: new Set(),
-      });
+      byCliente.set(cliente, { cliente, m3: 0, totalCLP: 0, guiaIds: new Set(), productos: new Set() });
     }
 
     const agg = byCliente.get(cliente)!;
 
     const m3 = safeNum(it.cantidad_m3);
-    const precio = safeNum(it.precio_m3);
-    const subtotal = m3 * precio;
+    const subtotal = m3 * safeNum(it.precio_m3);
 
     agg.m3 += m3;
     agg.totalCLP += subtotal;
@@ -1286,10 +1243,8 @@ function buildClientes(guias: GuiaRow[], items: ItemRow[], productosMap: Map<str
 
   const totalM3 = rows.reduce((s, r) => s + r.m3, 0);
   const totalCLP = rows.reduce((s, r) => s + r.totalCLP, 0);
-  const clientesDistintos = rows.length;
-  const top10 = rows.slice(0, 10);
 
-  return { totalM3, totalCLP, clientesDistintos, top10 };
+  return { totalM3, totalCLP, clientesDistintos: rows.length, top10: rows.slice(0, 10) };
 }
 
 function ClientesTab({
@@ -1368,15 +1323,260 @@ function ClientesTab({
             </table>
 
             <div className="spacer" />
-            <div className="muted">
-              Próximo upgrade: “Cliente → detalle por producto” (qué compra cada cliente).
-            </div>
+            <div className="muted">Próximo upgrade: “Cliente → detalle por producto”.</div>
 
             <div className="spacer" />
 
             <div className="row">
               <Link className="btn" href={`/reportes?tab=productos&desde=${desde}&hasta=${hasta}`}>
                 Ir a Productos
+              </Link>
+              <Link className="btn" href={`/reportes?tab=facturacion&desde=${desde}&hasta=${hasta}`}>
+                Ir a Facturación
+              </Link>
+              <Link className="btn btnPrimary" href="/guias/nueva">
+                + Nueva guía
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ======================
+   TAB 7: COBRANZA (AGING)
+   ====================== */
+function buildCobranzaAging(guias: GuiaRow[], items: ItemRow[]) {
+  const guiaMap = new Map<string, GuiaRow>();
+  for (const g of guias) guiaMap.set(g.id, g);
+
+  type BucketAgg = { deuda: number; guias: Set<string>; clientes: Set<string> };
+  const buckets = new Map<AgingBucketKey, BucketAgg>([
+    ["0_7", { deuda: 0, guias: new Set(), clientes: new Set() }],
+    ["8_15", { deuda: 0, guias: new Set(), clientes: new Set() }],
+    ["16_30", { deuda: 0, guias: new Set(), clientes: new Set() }],
+    ["31_plus", { deuda: 0, guias: new Set(), clientes: new Set() }],
+    ["sin_fecha", { deuda: 0, guias: new Set(), clientes: new Set() }],
+  ]);
+
+  type CliAgg = {
+    cliente: string;
+    deudaTotal: number;
+    guias: Set<string>;
+    // deuda por bucket
+    b0_7: number;
+    b8_15: number;
+    b16_30: number;
+    b31: number;
+    bSF: number;
+  };
+
+  const byCliente = new Map<string, CliAgg>();
+
+  let totalDeuda = 0;
+  let totalGuiasPendientes = 0;
+
+  // contar guías pendientes
+  for (const g of guias) {
+    if (String(g.estado_facturacion ?? "").toUpperCase() === "PENDIENTE") totalGuiasPendientes += 1;
+  }
+
+  for (const it of items) {
+    const g = guiaMap.get(it.guia_id);
+    if (!g) continue;
+
+    const est = String(g.estado_facturacion ?? "").toUpperCase();
+    if (est !== "PENDIENTE") continue;
+
+    const cliente = getClientName(g);
+    const subtotal = safeNum(it.cantidad_m3) * safeNum(it.precio_m3);
+    const b = getBucketFromGuiaFecha(g.fecha);
+
+    // buckets globales
+    const aggB = buckets.get(b)!;
+    aggB.deuda += subtotal;
+    aggB.guias.add(g.id);
+    aggB.clientes.add(cliente);
+
+    // por cliente
+    if (!byCliente.has(cliente)) {
+      byCliente.set(cliente, {
+        cliente,
+        deudaTotal: 0,
+        guias: new Set(),
+        b0_7: 0,
+        b8_15: 0,
+        b16_30: 0,
+        b31: 0,
+        bSF: 0,
+      });
+    }
+    const c = byCliente.get(cliente)!;
+    c.deudaTotal += subtotal;
+    c.guias.add(g.id);
+
+    if (b === "0_7") c.b0_7 += subtotal;
+    else if (b === "8_15") c.b8_15 += subtotal;
+    else if (b === "16_30") c.b16_30 += subtotal;
+    else if (b === "31_plus") c.b31 += subtotal;
+    else c.bSF += subtotal;
+
+    totalDeuda += subtotal;
+  }
+
+  const bucketRows = (["0_7", "8_15", "16_30", "31_plus", "sin_fecha"] as AgingBucketKey[]).map(
+    (k) => {
+      const v = buckets.get(k)!;
+      return {
+        key: k,
+        label: bucketLabel(k),
+        deuda: v.deuda,
+        guias: v.guias.size,
+        clientes: v.clientes.size,
+        pct: totalDeuda > 0 ? (v.deuda / totalDeuda) * 100 : 0,
+      };
+    }
+  );
+
+  const clientesRows = Array.from(byCliente.values())
+    .map((c) => ({
+      cliente: c.cliente,
+      deudaTotal: c.deudaTotal,
+      guias: c.guias.size,
+      b0_7: c.b0_7,
+      b8_15: c.b8_15,
+      b16_30: c.b16_30,
+      b31: c.b31,
+      bSF: c.bSF,
+    }))
+    .sort((a, b) => b.deudaTotal - a.deudaTotal);
+
+  const clientesConDeuda = clientesRows.length;
+  const promDeudaCliente = clientesConDeuda > 0 ? totalDeuda / clientesConDeuda : 0;
+
+  return {
+    totalDeuda,
+    totalGuiasPendientes,
+    clientesConDeuda,
+    promDeudaCliente,
+    bucketRows,
+    clientesRows: clientesRows.slice(0, 25), // Top 25
+  };
+}
+
+function CobranzaTab({
+  desde,
+  hasta,
+  data,
+}: {
+  desde: string;
+  hasta: string;
+  data: ReturnType<typeof buildCobranzaAging>;
+}) {
+  const maxDeuda = Math.max(1, ...data.bucketRows.map((x) => x.deuda));
+
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="section">
+        <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Cobranza (Aging)</h2>
+        <div className="muted" style={{ marginTop: 6 }}>
+          Solo guías con estado <strong>PENDIENTE</strong>. Aging por fecha de la guía:
+          <strong> 0–7</strong>, <strong>8–15</strong>, <strong>16–30</strong>, <strong>+30</strong>.
+        </div>
+
+        <div className="muted" style={{ marginTop: 6 }}>
+          Mostrando desde <strong>{desde}</strong> hasta <strong>{hasta}</strong>
+        </div>
+
+        <div className="kpiGrid" style={{ marginTop: 16 }}>
+          <KPI label="Deuda total (pendiente)" value={formatCLP(data.totalDeuda)} />
+          <KPI label="Guías pendientes" value={String(data.totalGuiasPendientes)} />
+          <KPI label="Clientes con deuda" value={String(data.clientesConDeuda)} />
+          <KPI label="Prom. deuda / cliente" value={formatCLP(data.promDeudaCliente)} />
+          <KPI label="Desde" value={desde} />
+          <KPI label="Hasta" value={hasta} />
+        </div>
+
+        <div className="spacer" />
+
+        <div className="grid2">
+          <div className="cardInner">
+            <div className="cardTitle">Aging de deuda (resumen)</div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Tramo</th>
+                  <th style={{ width: 220 }}>Deuda</th>
+                  <th style={{ textAlign: "right" }}>Guías</th>
+                  <th style={{ textAlign: "right" }}>Clientes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.bucketRows.map((r) => (
+                  <tr key={r.key}>
+                    <td style={{ fontWeight: 900 }}>{r.label}</td>
+                    <td>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <div style={{ fontWeight: 900 }}>{formatCLP(r.deuda)}</div>
+                        <Bar pct={(r.deuda / maxDeuda) * 100} />
+                        <div className="muted" style={{ fontSize: 12 }}>
+                          {formatNumber(r.pct, 1)}% del total
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ textAlign: "right" }}>{r.guias}</td>
+                    <td style={{ textAlign: "right" }}>{r.clientes}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="spacer" />
+            <div className="muted">Nota: “Sin fecha” aparece si alguna guía no tiene fecha guardada.</div>
+          </div>
+
+          <div className="cardInner">
+            <div className="cardTitle">Top 25 clientes por deuda (con aging)</div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th style={{ textAlign: "right" }}>Total</th>
+                  <th style={{ textAlign: "right" }}>Guías</th>
+                  <th style={{ textAlign: "right" }}>0–7</th>
+                  <th style={{ textAlign: "right" }}>8–15</th>
+                  <th style={{ textAlign: "right" }}>16–30</th>
+                  <th style={{ textAlign: "right" }}>+30</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.clientesRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="muted" style={{ padding: 14 }}>
+                      No hay deuda pendiente en este rango.
+                    </td>
+                  </tr>
+                ) : (
+                  data.clientesRows.map((c) => (
+                    <tr key={c.cliente}>
+                      <td style={{ fontWeight: 900 }}>{c.cliente}</td>
+                      <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(c.deudaTotal)}</td>
+                      <td style={{ textAlign: "right" }}>{c.guias}</td>
+                      <td style={{ textAlign: "right" }}>{formatCLP(c.b0_7)}</td>
+                      <td style={{ textAlign: "right" }}>{formatCLP(c.b8_15)}</td>
+                      <td style={{ textAlign: "right" }}>{formatCLP(c.b16_30)}</td>
+                      <td style={{ textAlign: "right" }}>{formatCLP(c.b31)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+
+            <div className="spacer" />
+            <div className="row">
+              <Link className="btn" href={`/guias?desde=${desde}&hasta=${hasta}`}>
+                Ver guías del rango
               </Link>
               <Link className="btn" href={`/reportes?tab=facturacion&desde=${desde}&hasta=${hasta}`}>
                 Ir a Facturación
@@ -1424,9 +1624,7 @@ export default async function ReportesPage({
         <div className="card">
           <div className="section">
             <div style={{ fontWeight: 900, marginBottom: 10 }}>Error al cargar datos</div>
-            <div className="muted">
-              {e?.message ?? "Ocurrió un error al consultar la base de datos."}
-            </div>
+            <div className="muted">{e?.message ?? "Ocurrió un error al consultar la base de datos."}</div>
 
             <div className="spacer" />
 
@@ -1439,13 +1637,13 @@ export default async function ReportesPage({
     );
   }
 
-  // Builds
   const dashboard = buildDashboard(guias, items, productosMap);
   const facturacion = buildFacturacion(guias, items);
   const produccion = buildProduccionPorDia(guias, items);
   const camiones = buildCamionesChoferes(guias, items);
   const productos = buildProductos(guias, items, productosMap);
   const clientes = buildClientes(guias, items, productosMap);
+  const cobranza = buildCobranzaAging(guias, items);
 
   return (
     <div className="container">
@@ -1460,6 +1658,7 @@ export default async function ReportesPage({
       {tab === "camiones" && <CamionesTab data={camiones} />}
       {tab === "productos" && <ProductosTab desde={desde} hasta={hasta} data={productos} />}
       {tab === "clientes" && <ClientesTab desde={desde} hasta={hasta} data={clientes} />}
+      {tab === "cobranza" && <CobranzaTab desde={desde} hasta={hasta} data={cobranza} />}
     </div>
   );
 }
