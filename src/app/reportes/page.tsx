@@ -1,29 +1,36 @@
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
-type MedioPago = "BANCO_CHILE" | "BANCO_ESTADO" | "EFECTIVO" | "CREDITO" | string;
-type EstadoFact = "PENDIENTE" | "PAGADO" | "FACTURADO" | string;
+/**
+ * Reportes (3 tabs):
+ * 1) Dashboard Operativo
+ * 2) Facturación
+ * 3) Producción por día
+ *
+ * IMPORTANTE: NO usamos guias.cliente_manual porque en tu BD NO existe.
+ * Trabajamos con cliente_id y join clientes(nombre).
+ */
 
-type Guia = {
+type TabKey = "dashboard" | "facturacion" | "produccion";
+
+type GuiaRow = {
   id: string;
-  fecha: string | null;
+  fecha: string | null; // YYYY-MM-DD
   cliente_id: string | null;
-  medio_pago: MedioPago | null;
-  estado_facturacion: EstadoFact | null;
-  tipo_operacion: string | null;
-  sector: string | null;
+  medio_pago: "BANCO_CHILE" | "BANCO_ESTADO" | "EFECTIVO" | "CREDITO" | string | null;
+  estado_facturacion: "PENDIENTE" | "PAGADO" | string | null;
   clientes?: { nombre: string } | null;
 };
 
-type GuiaItem = {
+type ItemRow = {
   id: string;
   guia_id: string;
-  producto_id: string;
+  producto_id: string | null;
   cantidad_m3: number | null;
   precio_m3: number | null;
 };
 
-type Producto = {
+type ProductoRow = {
   id: string;
   nombre: string;
 };
@@ -35,19 +42,28 @@ function toISODate(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
-function clp(n: number) {
+function addDaysISO(iso: string, days: number) {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return toISODate(d);
+}
+
+function safeNum(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatCLP(n: number) {
   return new Intl.NumberFormat("es-CL", {
     style: "currency",
     currency: "CLP",
     maximumFractionDigits: 0,
-  }).format(Math.round(n || 0));
+  }).format(Number.isFinite(n) ? n : 0);
 }
 
-function numCL(n: number) {
-  return new Intl.NumberFormat("es-CL", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n || 0);
+function formatNumber(n: number, decimals = 2) {
+  const v = Number.isFinite(n) ? n : 0;
+  return v.toFixed(decimals).replace(".", ",");
 }
 
 function medioPagoLabel(v: string | null) {
@@ -59,592 +75,739 @@ function medioPagoLabel(v: string | null) {
   return v;
 }
 
-function isFacturado(estado: string | null) {
-  return estado === "PAGADO" || estado === "FACTURADO";
-}
-
-function isPendiente(estado: string | null) {
-  return !isFacturado(estado);
-}
-
-function buildUrl(path: string, params: Record<string, string | undefined>) {
-  const sp = new URLSearchParams();
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && String(v).length > 0) sp.set(k, String(v));
-  });
-  const q = sp.toString();
-  return q ? `${path}?${q}` : path;
-}
-
-export default async function ReportesPage({
-  searchParams,
-}: {
-  searchParams: Promise<{
-    tab?: string;
-    desde?: string;
-    hasta?: string;
-    quick?: string;
-    soloPendientes?: string;
-  }>;
-}) {
-  const sp = await searchParams;
-
-  const tab = sp.tab === "facturacion" ? "facturacion" : "dashboard";
-
-  const today = new Date();
-  const todayISO = toISODate(today);
-
-  // rango
-  let desde = sp.desde || todayISO;
-  let hasta = sp.hasta || todayISO;
-
-  // filtro: solo pendientes (para Facturación)
-  const soloPendientes = sp.soloPendientes === "1";
-
-  // quick shortcuts
-  if (sp.quick === "hoy") {
-    desde = todayISO;
-    hasta = todayISO;
-  }
-  if (sp.quick === "ayer") {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    const iso = toISODate(d);
-    desde = iso;
-    hasta = iso;
-  }
-  if (sp.quick === "7d") {
-    const d = new Date();
-    d.setDate(d.getDate() - 6);
-    desde = toISODate(d);
-    hasta = todayISO;
-  }
-  if (sp.quick === "30d") {
-    const d = new Date();
-    d.setDate(d.getDate() - 29);
-    desde = toISODate(d);
-    hasta = todayISO;
-  }
-
-  // Traer guías del rango
-  const { data: guiasData, error: guiasErr } = await supabase
+async function fetchGuiasEnRango(desde: string, hasta: string) {
+  const { data, error } = await supabase
     .from("guias")
-    .select("id, fecha, cliente_id, medio_pago, estado_facturacion, tipo_operacion, sector, clientes(nombre)")
+    .select("id, fecha, cliente_id, medio_pago, estado_facturacion, clientes(nombre)")
     .gte("fecha", desde)
     .lte("fecha", hasta)
     .order("fecha", { ascending: true });
 
-  const guias = (guiasData ?? []) as Guia[];
+  if (error) throw error;
+  return (data ?? []) as GuiaRow[];
+}
 
-  // Traer items de esas guías
-  const guiaIds = guias.map((g) => g.id);
-  let items: GuiaItem[] = [];
-  let productosMap = new Map<string, string>();
+async function fetchItemsPorGuias(guiaIds: string[]) {
+  if (guiaIds.length === 0) return [] as ItemRow[];
 
-  if (!guiasErr && guiaIds.length > 0) {
-    const { data: itemsData } = await supabase
-      .from("guia_items")
-      .select("id, guia_id, producto_id, cantidad_m3, precio_m3")
-      .in("guia_id", guiaIds);
+  const { data, error } = await supabase
+    .from("guia_items")
+    .select("id, guia_id, producto_id, cantidad_m3, precio_m3")
+    .in("guia_id", guiaIds);
 
-    items = (itemsData ?? []) as GuiaItem[];
+  if (error) throw error;
+  return (data ?? []) as ItemRow[];
+}
 
-    const productoIds = Array.from(new Set(items.map((x) => x.producto_id))).filter(Boolean);
-    if (productoIds.length > 0) {
-      const { data: prodsData } = await supabase.from("productos").select("id, nombre").in("id", productoIds);
-      const prods = (prodsData ?? []) as Producto[];
-      productosMap = new Map(prods.map((p) => [p.id, p.nombre]));
-    }
-  }
+async function fetchProductosMap(productoIds: string[]) {
+  const map = new Map<string, string>();
+  const ids = Array.from(new Set(productoIds)).filter(Boolean);
+  if (ids.length === 0) return map;
 
-  // Helpers de totales
-  const guiaIdToItems = new Map<string, GuiaItem[]>();
-  for (const it of items) {
-    const arr = guiaIdToItems.get(it.guia_id) ?? [];
-    arr.push(it);
-    guiaIdToItems.set(it.guia_id, arr);
-  }
+  const { data, error } = await supabase.from("productos").select("id, nombre").in("id", ids);
+  if (error) throw error;
 
-  const guiaTotalCLP = (g: Guia) => {
-    const its = guiaIdToItems.get(g.id) ?? [];
-    let total = 0;
-    for (const it of its) {
-      const m3 = Number(it.cantidad_m3 ?? 0);
-      const p = Number(it.precio_m3 ?? 0);
-      total += m3 * p;
-    }
-    return total;
-  };
+  const rows = (data ?? []) as ProductoRow[];
+  for (const p of rows) map.set(p.id, p.nombre);
+  return map;
+}
 
-  // =========================
-  // DASHBOARD
-  // =========================
-  const totalM3 = items.reduce((acc, it) => acc + Number(it.cantidad_m3 ?? 0), 0);
-  const totalGuias = guias.length;
-  const clientesDistintos = new Set(guias.map((g) => g.clientes?.nombre ?? "").filter(Boolean)).size;
-  const promedioM3 = totalGuias > 0 ? totalM3 / totalGuias : 0;
+function getClientName(g: GuiaRow) {
+  return g.clientes?.nombre ?? "(sin cliente)";
+}
+
+function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string }) {
+  const mk = (t: TabKey) => `/reportes?tab=${t}&desde=${desde}&hasta=${hasta}`;
+
+  return (
+    <div className="reportsTop card">
+      <div className="toolbar">
+        <div>
+          <div style={{ fontWeight: 900, fontSize: 16 }}>Selecciona el tipo de reporte</div>
+          <div className="muted">Reportes base del Plan Control Operativo</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <Link href="/guias" className="btn">
+            ← Volver a Guías
+          </Link>
+        </div>
+      </div>
+
+      <div className="section">
+        <div className="tabs">
+          <Link className={`tab ${tab === "dashboard" ? "active" : ""}`} href={mk("dashboard")}>
+            Dashboard
+          </Link>
+          <Link className={`tab ${tab === "facturacion" ? "active" : ""}`} href={mk("facturacion")}>
+            Facturación
+          </Link>
+          <Link className={`tab ${tab === "produccion" ? "active" : ""}`} href={mk("produccion")}>
+            Producción
+          </Link>
+        </div>
+
+        <div className="muted" style={{ marginTop: 10 }}>
+          Tip: si quieres, después agregamos más pestañas (Camiones/Choferes, Productos, Escombrera, etc.) sin tocar el diseño.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RangeBox({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string }) {
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="section">
+        <div className="muted" style={{ marginBottom: 10 }}>
+          Mostrando desde <strong>{desde}</strong> hasta <strong>{hasta}</strong>
+        </div>
+
+        <div className="rangeBox">
+          <div className="rangeLeft">
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Rango</div>
+
+            <form className="row" action="/reportes" method="get">
+              <input type="hidden" name="tab" value={tab} />
+
+              <div className="field">
+                <div className="fieldLabel">Desde</div>
+                <input className="input" type="date" name="desde" defaultValue={desde} />
+              </div>
+
+              <div className="field">
+                <div className="fieldLabel">Hasta</div>
+                <input className="input" type="date" name="hasta" defaultValue={hasta} />
+              </div>
+
+              <button className="btn btnPrimary" type="submit">
+                Aplicar
+              </button>
+            </form>
+          </div>
+
+          <div className="rangeQuick">
+            <Link className="btn" href={`/reportes?tab=${tab}&desde=${toISODate(new Date())}&hasta=${toISODate(new Date())}`}>
+              Hoy
+            </Link>
+            <Link className="btn" href={`/reportes?tab=${tab}&desde=${addDaysISO(toISODate(new Date()), -1)}&hasta=${addDaysISO(toISODate(new Date()), -1)}`}>
+              Ayer
+            </Link>
+            <Link className="btn" href={`/reportes?tab=${tab}&desde=${addDaysISO(toISODate(new Date()), -6)}&hasta=${toISODate(new Date())}`}>
+              Últimos 7 días
+            </Link>
+            <Link className="btn" href={`/reportes?tab=${tab}&desde=${addDaysISO(toISODate(new Date()), -29)}&hasta=${toISODate(new Date())}`}>
+              Últimos 30 días
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KPI({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="kpiCard">
+      <div className="kpiLabel">{label}</div>
+      <div className="kpiValue">{value}</div>
+    </div>
+  );
+}
+
+function Bar({ pct }: { pct: number }) {
+  const p = Math.max(0, Math.min(100, pct));
+  return (
+    <div className="bar">
+      <div className="barFill" style={{ width: `${p}%` }} />
+    </div>
+  );
+}
+
+/* ======================
+   TAB 1: DASHBOARD
+   ====================== */
+function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<string, string>) {
+  const guiaIds = new Set(guias.map((g) => g.id));
+  const itemsOk = items.filter((it) => guiaIds.has(it.guia_id));
+
+  const totalM3 = itemsOk.reduce((s, it) => s + safeNum(it.cantidad_m3), 0);
+  const guiasCount = guias.length;
+
+  const clientesDistintos = new Set(
+    guias.map((g) => (g.cliente_id ? `ID:${g.cliente_id}` : `TXT:${getClientName(g)}`))
+  ).size;
+
+  const promM3Guia = guiasCount > 0 ? totalM3 / guiasCount : 0;
 
   // Top productos por m3
   const prodAgg = new Map<string, number>();
-  for (const it of items) {
-    const key = it.producto_id;
-    const cur = prodAgg.get(key) ?? 0;
-    prodAgg.set(key, cur + Number(it.cantidad_m3 ?? 0));
+  for (const it of itemsOk) {
+    const pid = it.producto_id ?? "";
+    if (!pid) continue;
+    prodAgg.set(pid, (prodAgg.get(pid) ?? 0) + safeNum(it.cantidad_m3));
   }
   const topProductos = Array.from(prodAgg.entries())
-    .map(([producto_id, m3]) => ({
-      producto: productosMap.get(producto_id) ?? "(producto)",
-      m3,
-    }))
+    .map(([pid, m3]) => ({ producto: productosMap.get(pid) ?? "(producto)", m3 }))
     .sort((a, b) => b.m3 - a.m3)
     .slice(0, 5);
 
   // Top clientes por m3
-  const clienteAgg = new Map<string, number>();
-  for (const g of guias) {
-    const nombre = g.clientes?.nombre ?? "(sin cliente)";
-    const its = guiaIdToItems.get(g.id) ?? [];
-    const m3 = its.reduce((acc, it) => acc + Number(it.cantidad_m3 ?? 0), 0);
-    clienteAgg.set(nombre, (clienteAgg.get(nombre) ?? 0) + m3);
+  const guiaMap = new Map<string, GuiaRow>();
+  for (const g of guias) guiaMap.set(g.id, g);
+
+  const cliAgg = new Map<string, number>();
+  for (const it of itemsOk) {
+    const g = guiaMap.get(it.guia_id);
+    if (!g) continue;
+    const key = getClientName(g);
+    cliAgg.set(key, (cliAgg.get(key) ?? 0) + safeNum(it.cantidad_m3));
   }
-  const topClientes = Array.from(clienteAgg.entries())
+  const topClientes = Array.from(cliAgg.entries())
     .map(([cliente, m3]) => ({ cliente, m3 }))
     .sort((a, b) => b.m3 - a.m3)
     .slice(0, 5);
 
-  // Medio de pago (conteo guías)
-  const mpCount = new Map<string, number>();
+  // Medio de pago (cantidad de guías)
+  const mpAgg = new Map<string, number>();
   for (const g of guias) {
-    const k = medioPagoLabel(g.medio_pago);
-    mpCount.set(k, (mpCount.get(k) ?? 0) + 1);
+    const k = medioPagoLabel(g.medio_pago ?? null);
+    mpAgg.set(k, (mpAgg.get(k) ?? 0) + 1);
   }
-  const medioPagoCountRows = Array.from(mpCount.entries())
+  const mediosPago = Array.from(mpAgg.entries())
     .map(([medio, guias]) => ({ medio, guias }))
     .sort((a, b) => b.guias - a.guias);
 
-  // =========================
-  // FACTURACIÓN
-  // =========================
-  type ClienteRow = {
-    cliente: string;
-    facturado: number;
-    pendiente: number;
-    estado: "OK" | "Pendiente";
-  };
+  return { totalM3, guiasCount, clientesDistintos, promM3Guia, topProductos, topClientes, mediosPago };
+}
 
-  const clienteMoney = new Map<string, { facturado: number; pendiente: number }>();
+function DashboardTab({
+  desde,
+  hasta,
+  data,
+}: {
+  desde: string;
+  hasta: string;
+  data: ReturnType<typeof buildDashboard>;
+}) {
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="section">
+        <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Dashboard Operativo</h2>
+        <div className="muted" style={{ marginTop: 6 }}>
+          Vista general rápida del desempeño (base para el Plan 1)
+        </div>
 
+        <div className="kpiGrid" style={{ marginTop: 16 }}>
+          <KPI label="Total m³" value={formatNumber(data.totalM3, 2)} />
+          <KPI label="Guías" value={String(data.guiasCount)} />
+          <KPI label="Clientes atendidos" value={String(data.clientesDistintos)} />
+          <KPI label="Promedio m³ / guía" value={formatNumber(data.promM3Guia, 2)} />
+          <KPI label="Desde" value={desde} />
+          <KPI label="Hasta" value={hasta} />
+        </div>
+
+        <div className="spacer" />
+
+        <div className="grid3">
+          <div className="cardInner">
+            <div className="cardTitle">Top 5 productos por m³</div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th style={{ textAlign: "right" }}>m³</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.topProductos.length === 0 ? (
+                  <tr>
+                    <td colSpan={2} className="muted" style={{ padding: 14 }}>
+                      Sin datos.
+                    </td>
+                  </tr>
+                ) : (
+                  data.topProductos.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.producto}</td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="cardInner">
+            <div className="cardTitle">Top 5 clientes por m³</div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th style={{ textAlign: "right" }}>m³</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.topClientes.length === 0 ? (
+                  <tr>
+                    <td colSpan={2} className="muted" style={{ padding: 14 }}>
+                      Sin datos.
+                    </td>
+                  </tr>
+                ) : (
+                  data.topClientes.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.cliente}</td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="cardInner">
+            <div className="cardTitle">Medio de pago (cantidad de guías)</div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Medio</th>
+                  <th style={{ textAlign: "right" }}>Guías</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.mediosPago.length === 0 ? (
+                  <tr>
+                    <td colSpan={2} className="muted" style={{ padding: 14 }}>
+                      Sin datos.
+                    </td>
+                  </tr>
+                ) : (
+                  data.mediosPago.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.medio}</td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{r.guias}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="spacer" />
+
+        <div className="row">
+          <Link className="btn" href={`/guias?desde=${desde}&hasta=${hasta}`}>
+            Ver guías
+          </Link>
+          <Link className="btn btnPrimary" href="/guias/nueva">
+            + Nueva guía
+          </Link>
+          <Link className="btn" href={`/reportes?tab=facturacion&desde=${desde}&hasta=${hasta}`}>
+            Ir a Facturación
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ======================
+   TAB 2: FACTURACIÓN
+   ====================== */
+function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
+  const guiaMap = new Map<string, GuiaRow>();
+  for (const g of guias) guiaMap.set(g.id, g);
+
+  // Totales por cliente
+  type CliAgg = { facturado: number; pendiente: number; estado: string };
+  const byCliente = new Map<string, CliAgg>();
+
+  let totalFacturado = 0;
+  let totalPendiente = 0;
+
+  // Conteo de guías por medio de pago (para complementar lo que pediste)
+  const mpCount = new Map<string, number>();
   for (const g of guias) {
-    const cliente = g.clientes?.nombre ?? "(sin cliente)";
-    const total = guiaTotalCLP(g);
-    const bucket = clienteMoney.get(cliente) ?? { facturado: 0, pendiente: 0 };
-
-    if (isFacturado(g.estado_facturacion)) bucket.facturado += total;
-    else bucket.pendiente += total;
-
-    clienteMoney.set(cliente, bucket);
+    const k = medioPagoLabel(g.medio_pago ?? null);
+    mpCount.set(k, (mpCount.get(k) ?? 0) + 1);
   }
 
-  const clientesFactRowsAll: ClienteRow[] = Array.from(clienteMoney.entries())
-    .map(([cliente, v]) => ({
-      cliente,
-      facturado: v.facturado,
-      pendiente: v.pendiente,
-      estado: v.pendiente > 0 ? "Pendiente" : "OK",
-    }))
-    .sort((a, b) => b.pendiente - a.pendiente || b.facturado - a.facturado);
+  // Guías en crédito / por cobrar (conteo)
+  const guiasCredito = guias.filter((g) => (g.medio_pago ?? "").toUpperCase() === "CREDITO").length;
 
-  const topDeuda = clientesFactRowsAll
-    .filter((r) => r.pendiente > 0)
-    .sort((a, b) => b.pendiente - a.pendiente)
-    .slice(0, 5);
+  for (const it of items) {
+    const g = guiaMap.get(it.guia_id);
+    if (!g) continue;
 
-  const clientesFactRows = soloPendientes ? clientesFactRowsAll.filter((r) => r.pendiente > 0) : clientesFactRowsAll;
+    const cliente = getClientName(g);
+    const subtotal = safeNum(it.cantidad_m3) * safeNum(it.precio_m3);
 
-  const totalFacturado = clientesFactRowsAll.reduce((acc, r) => acc + r.facturado, 0);
-  const totalPendiente = clientesFactRowsAll.reduce((acc, r) => acc + r.pendiente, 0);
+    if (!byCliente.has(cliente)) byCliente.set(cliente, { facturado: 0, pendiente: 0, estado: "Pendiente" });
+    const agg = byCliente.get(cliente)!;
 
-  const guiasCredito = guias.filter((g) => g.medio_pago === "CREDITO").length;
-  const guiasPorCobrar = guias.filter((g) => isPendiente(g.estado_facturacion)).length;
+    const est = (g.estado_facturacion ?? "").toUpperCase();
+    if (est === "PAGADO") {
+      agg.facturado += subtotal;
+      totalFacturado += subtotal;
+    } else {
+      agg.pendiente += subtotal;
+      totalPendiente += subtotal;
+    }
 
-  // Medios de pago (guías y $ total)
-  const mpMoney = new Map<string, { guias: number; total: number; pendientes: number }>();
-  for (const g of guias) {
-    const k = medioPagoLabel(g.medio_pago);
-    const total = guiaTotalCLP(g);
-    const cur = mpMoney.get(k) ?? { guias: 0, total: 0, pendientes: 0 };
-    cur.guias += 1;
-    cur.total += total;
-    if (isPendiente(g.estado_facturacion)) cur.pendientes += 1;
-    mpMoney.set(k, cur);
+    agg.estado = agg.pendiente > 0 ? "Pendiente" : "OK";
   }
-  const medioPagoMoneyRows = Array.from(mpMoney.entries())
-    .map(([medio, v]) => ({ medio, guias: v.guias, total: v.total, pendientes: v.pendientes }))
-    .sort((a, b) => b.total - a.total);
 
-  // URLs helpers
-  const urlDashboard = buildUrl("/reportes", { tab: "dashboard", desde, hasta });
-  const urlFacturacion = buildUrl("/reportes", { tab: "facturacion", desde, hasta, soloPendientes: soloPendientes ? "1" : undefined });
-  const urlFactSoloPend = buildUrl("/reportes", { tab: "facturacion", desde, hasta, soloPendientes: soloPendientes ? undefined : "1" });
+  const tabla = Array.from(byCliente.entries())
+    .map(([cliente, v]) => ({ cliente, ...v }))
+    .sort((a, b) => b.pendiente - a.pendiente);
 
-  const quickUrl = (q: string) =>
-    buildUrl("/reportes", {
-      tab,
-      quick: q,
-      soloPendientes: tab === "facturacion" ? (soloPendientes ? "1" : undefined) : undefined,
+  const medios = Array.from(mpCount.entries())
+    .map(([medio, guias]) => ({ medio, guias }))
+    .sort((a, b) => b.guias - a.guias);
+
+  return { totalFacturado, totalPendiente, guiasCredito, tabla, medios };
+}
+
+function FacturacionTab({
+  desde,
+  hasta,
+  data,
+}: {
+  desde: string;
+  hasta: string;
+  data: ReturnType<typeof buildFacturacion>;
+}) {
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="section">
+        <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Reporte de Facturación</h2>
+        <div className="muted" style={{ marginTop: 6 }}>
+          Resumen por cliente: facturado vs pendiente (sin planillas extra)
+        </div>
+        <div className="muted" style={{ marginTop: 6 }}>
+          Mostrando desde <strong>{desde}</strong> hasta <strong>{hasta}</strong>
+        </div>
+
+        <div className="kpiGrid" style={{ marginTop: 16 }}>
+          <KPI label="Total facturado (rango)" value={formatCLP(data.totalFacturado)} />
+          <KPI label="Total pendiente" value={formatCLP(data.totalPendiente)} />
+          <KPI label="Guías en crédito / por cobrar" value={String(data.guiasCredito)} />
+          <KPI label="Guías Banco Chile" value={String(data.medios.find((x) => x.medio === "Banco de Chile")?.guias ?? 0)} />
+          <KPI label="Guías Banco Estado" value={String(data.medios.find((x) => x.medio === "Banco Estado")?.guias ?? 0)} />
+          <KPI label="Guías Efectivo" value={String(data.medios.find((x) => x.medio === "Efectivo")?.guias ?? 0)} />
+        </div>
+
+        <div className="spacer" />
+
+        <div className="card" style={{ border: "1px solid var(--line)" }}>
+          <div className="toolbar" style={{ borderBottom: "1px solid var(--line)" }}>
+            <div style={{ fontWeight: 900 }}>Resumen por cliente</div>
+            <div className="muted">Calculado como suma de (m³ * precio por m³) en los items de cada guía.</div>
+          </div>
+
+          <div className="section" style={{ paddingTop: 10 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th style={{ textAlign: "right" }}>Facturado</th>
+                  <th style={{ textAlign: "right" }}>Pendiente</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.tabla.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="muted" style={{ padding: 14 }}>
+                      No hay datos en este rango.
+                    </td>
+                  </tr>
+                ) : (
+                  data.tabla.map((r) => (
+                    <tr key={r.cliente}>
+                      <td style={{ fontWeight: 900 }}>{r.cliente}</td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.facturado)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.pendiente)}</td>
+                      <td style={{ fontWeight: 900 }}>{r.estado}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+
+            <div className="spacer" />
+
+            <div className="muted">
+              Siguiente paso (cuando quieras): exportar CSV y botón “Marcar como facturado” directo desde esta tabla.
+            </div>
+          </div>
+        </div>
+
+        <div className="spacer" />
+
+        <div className="row">
+          <Link className="btn" href={`/guias?desde=${desde}&hasta=${hasta}`}>
+            Ver guías del rango
+          </Link>
+          <Link className="btn btnPrimary" href="/guias/nueva">
+            + Nueva guía
+          </Link>
+          <Link className="btn" href={`/reportes?tab=dashboard&desde=${desde}&hasta=${hasta}`}>
+            Ir a Dashboard
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ======================
+   TAB 3: PRODUCCIÓN
+   ====================== */
+function buildProduccionPorDia(guias: GuiaRow[], items: ItemRow[]) {
+  const guiaMap = new Map<string, GuiaRow>();
+  for (const g of guias) guiaMap.set(g.id, g);
+
+  const byDay = new Map<
+    string,
+    { guiaIds: Set<string>; clientes: Set<string>; m3: number; total: number; pendiente: number }
+  >();
+
+  for (const it of items) {
+    const g = guiaMap.get(it.guia_id);
+    if (!g) continue;
+
+    const fecha = g.fecha ?? "";
+    if (!fecha) continue;
+
+    if (!byDay.has(fecha)) {
+      byDay.set(fecha, { guiaIds: new Set(), clientes: new Set(), m3: 0, total: 0, pendiente: 0 });
+    }
+
+    const agg = byDay.get(fecha)!;
+    agg.guiaIds.add(g.id);
+    agg.clientes.add(getClientName(g));
+
+    const m3 = safeNum(it.cantidad_m3);
+    const precio = safeNum(it.precio_m3);
+    const subtotal = m3 * precio;
+
+    agg.m3 += m3;
+    agg.total += subtotal;
+
+    if ((g.estado_facturacion ?? "").toUpperCase() === "PENDIENTE") {
+      agg.pendiente += subtotal;
+    }
+  }
+
+  const days = Array.from(byDay.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([fecha, v]) => {
+      const guiasCount = v.guiaIds.size;
+      return {
+        fecha,
+        m3: v.m3,
+        guias: guiasCount,
+        clientes: v.clientes.size,
+        totalCLP: v.total,
+        pendienteCLP: v.pendiente,
+        avgM3PorGuia: guiasCount > 0 ? v.m3 / guiasCount : 0,
+        avgCLPPorGuia: guiasCount > 0 ? v.total / guiasCount : 0,
+      };
     });
 
-  // Link a /guias filtrado por cliente + rango (no rompe nada si tu /guias ignora params)
-  const guiasClienteUrl = (cliente: string) =>
-    buildUrl("/guias", {
-      desde,
-      hasta,
-      cliente, // opción A
-      cliente_like: cliente, // opción B
-    });
+  const totalM3 = days.reduce((s, d) => s + d.m3, 0);
+  const totalGuias = days.reduce((s, d) => s + d.guias, 0);
+  const totalCLP = days.reduce((s, d) => s + d.totalCLP, 0);
+  const totalPendiente = days.reduce((s, d) => s + d.pendienteCLP, 0);
+
+  const best = [...days].sort((a, b) => b.m3 - a.m3)[0] ?? null;
+  const worst = [...days].sort((a, b) => a.m3 - b.m3)[0] ?? null;
+
+  return { days, totalM3, totalGuias, totalCLP, totalPendiente, best, worst };
+}
+
+function ProduccionTab({
+  desde,
+  hasta,
+  data,
+}: {
+  desde: string;
+  hasta: string;
+  data: ReturnType<typeof buildProduccionPorDia>;
+}) {
+  const maxM3 = Math.max(1, ...data.days.map((d) => d.m3));
+
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="section">
+        <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Producción por día</h2>
+        <div className="muted" style={{ marginTop: 6 }}>
+          Tendencia diaria de m³, guías, clientes y $ (total / pendiente) para el rango seleccionado.
+        </div>
+
+        <div className="kpiGrid" style={{ marginTop: 16 }}>
+          <KPI label="Total m³ (rango)" value={formatNumber(data.totalM3, 2)} />
+          <KPI label="Guías (rango)" value={String(data.totalGuias)} />
+          <KPI label="Total $" value={formatCLP(data.totalCLP)} />
+          <KPI label="Pendiente $" value={formatCLP(data.totalPendiente)} />
+          <KPI label="Prom. m³ / guía" value={formatNumber(data.totalGuias > 0 ? data.totalM3 / data.totalGuias : 0, 2)} />
+          <KPI label="Prom. $ / guía" value={formatCLP(data.totalGuias > 0 ? data.totalCLP / data.totalGuias : 0)} />
+        </div>
+
+        <div className="spacer" />
+
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="muted">
+            Rango: <strong>{desde}</strong> → <strong>{hasta}</strong>
+          </div>
+
+          <div className="row">
+            {data.best && (
+              <div className="pill">
+                🟢 Mejor día: <strong>{data.best.fecha}</strong> ({formatNumber(data.best.m3, 2)} m³)
+              </div>
+            )}
+            {data.worst && (
+              <div className="pill">
+                🔴 Día más bajo: <strong>{data.worst.fecha}</strong> ({formatNumber(data.worst.m3, 2)} m³)
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="spacer" />
+
+        <div className="card" style={{ border: "1px solid var(--line)" }}>
+          <div className="toolbar" style={{ borderBottom: "1px solid var(--line)" }}>
+            <div style={{ fontWeight: 900 }}>Detalle por día</div>
+            <div className="muted">Se calcula desde items (m³ * precio/m³) agrupado por fecha</div>
+          </div>
+
+          <div className="section" style={{ paddingTop: 10 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: 120 }}>Fecha</th>
+                  <th style={{ width: 140 }}>m³</th>
+                  <th style={{ width: 90 }}>Guías</th>
+                  <th style={{ width: 110 }}>Clientes</th>
+                  <th style={{ width: 140 }}>Total $</th>
+                  <th style={{ width: 140 }}>Pendiente $</th>
+                  <th style={{ width: 160 }}>Prom. m³/guía</th>
+                  <th style={{ width: 160 }}>Prom. $/guía</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.days.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="muted" style={{ padding: 14 }}>
+                      No hay datos en este rango.
+                    </td>
+                  </tr>
+                ) : (
+                  data.days.map((d) => (
+                    <tr key={d.fecha}>
+                      <td style={{ fontWeight: 900 }}>{d.fecha}</td>
+                      <td>
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <div style={{ fontWeight: 900 }}>{formatNumber(d.m3, 2)}</div>
+                          <Bar pct={(d.m3 / maxM3) * 100} />
+                        </div>
+                      </td>
+                      <td>{d.guias}</td>
+                      <td>{d.clientes}</td>
+                      <td style={{ fontWeight: 900 }}>{formatCLP(d.totalCLP)}</td>
+                      <td style={{ fontWeight: 900 }}>{formatCLP(d.pendienteCLP)}</td>
+                      <td>{formatNumber(d.avgM3PorGuia, 2)}</td>
+                      <td>{formatCLP(d.avgCLPPorGuia)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+
+            <div className="spacer" />
+
+            <div className="row">
+              <Link className="btn" href={`/guias?desde=${desde}&hasta=${hasta}`}>
+                Ver guías del rango
+              </Link>
+              <Link className="btn btnPrimary" href="/guias/nueva">
+                + Nueva guía
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        <div className="spacer" />
+        <div className="muted">Próximo paso (cuando quieras): comparación vs periodo anterior (misma tabla).</div>
+      </div>
+    </div>
+  );
+}
+
+/* ======================
+   MAIN
+   ====================== */
+export default async function ReportesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string; desde?: string; hasta?: string }>;
+}) {
+  const sp = await searchParams;
+
+  const tab: TabKey = (sp.tab as TabKey) || "dashboard";
+
+  const hoy = toISODate(new Date());
+  const desde = sp.desde ?? hoy;
+  const hasta = sp.hasta ?? hoy;
+
+  let guias: GuiaRow[] = [];
+  let items: ItemRow[] = [];
+  let productosMap = new Map<string, string>();
+
+  try {
+    guias = await fetchGuiasEnRango(desde, hasta);
+    items = await fetchItemsPorGuias(guias.map((g) => g.id));
+    productosMap = await fetchProductosMap(items.map((it) => it.producto_id ?? ""));
+  } catch (e: any) {
+    return (
+      <div className="container">
+        <h1 className="pageTitle">Reportes</h1>
+
+        <div className="card">
+          <div className="section">
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Error al cargar datos</div>
+            <div className="muted">{e?.message ?? "Ocurrió un error al consultar la base de datos."}</div>
+
+            <div className="spacer" />
+
+            <Link className="btn" href="/guias">
+              Volver a Guías
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const dashboard = buildDashboard(guias, items, productosMap);
+  const facturacion = buildFacturacion(guias, items);
+  const produccion = buildProduccionPorDia(guias, items);
 
   return (
     <div className="container">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end" }}>
-        <div>
-          <div className="pageTitle">Reportes</div>
-          <div className="muted">
-            Mostrando desde <b>{desde}</b> hasta <b>{hasta}</b>
-          </div>
-        </div>
+      <h1 className="pageTitle">Reportes</h1>
 
-        <Link className="btn" href="/guias">
-          ← Volver a Guías
-        </Link>
-      </div>
+      <Tabs tab={tab} desde={desde} hasta={hasta} />
+      <RangeBox tab={tab} desde={desde} hasta={hasta} />
 
-      <div className="spacer" />
-
-      <div className="card">
-        <div className="toolbar">
-          <div style={{ fontWeight: 800, marginBottom: 8 }}>Rango</div>
-
-          <div className="row">
-            <div>
-              <div className="muted" style={{ fontWeight: 700, marginBottom: 6 }}>
-                Desde
-              </div>
-
-              <form action="/reportes" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input type="hidden" name="tab" value={tab} />
-                {tab === "facturacion" && <input type="hidden" name="soloPendientes" value={soloPendientes ? "1" : ""} />}
-                <input className="input" type="date" name="desde" defaultValue={desde} />
-                <div className="muted" style={{ fontWeight: 700 }}>
-                  Hasta
-                </div>
-                <input className="input" type="date" name="hasta" defaultValue={hasta} />
-                <button className="btn btnPrimary" type="submit">
-                  Aplicar
-                </button>
-              </form>
-            </div>
-
-            <div style={{ marginLeft: "auto" }} className="row">
-              <Link className="btn" href={quickUrl("hoy")}>
-                Hoy
-              </Link>
-              <Link className="btn" href={quickUrl("ayer")}>
-                Ayer
-              </Link>
-              <Link className="btn" href={quickUrl("7d")}>
-                Últimos 7 días
-              </Link>
-              <Link className="btn" href={quickUrl("30d")}>
-                Últimos 30 días
-              </Link>
-            </div>
-          </div>
-
-          <div className="spacer" />
-
-          <div className="row" style={{ justifyContent: "space-between", width: "100%" }}>
-            <div className="row">
-              <Link className={`btn ${tab === "dashboard" ? "btnPrimary" : ""}`} href={urlDashboard}>
-                Dashboard
-              </Link>
-              <Link className={`btn ${tab === "facturacion" ? "btnPrimary" : ""}`} href={urlFacturacion}>
-                Facturación
-              </Link>
-
-              {tab === "facturacion" && (
-                <Link className={`btn ${soloPendientes ? "btnPrimary" : ""}`} href={urlFactSoloPend}>
-                  {soloPendientes ? "Mostrando: Solo pendientes" : "Filtrar: Solo pendientes"}
-                </Link>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="section">
-          {tab === "dashboard" ? (
-            <>
-              <div className="row" style={{ gap: 14 }}>
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div className="muted" style={{ fontWeight: 800 }}>
-                    Total m³
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900 }}>{numCL(totalM3)}</div>
-                </div>
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div className="muted" style={{ fontWeight: 800 }}>
-                    Guías
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900 }}>{totalGuias}</div>
-                </div>
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div className="muted" style={{ fontWeight: 800 }}>
-                    Clientes atendidos
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900 }}>{clientesDistintos}</div>
-                </div>
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div className="muted" style={{ fontWeight: 800 }}>
-                    Promedio m³ / guía
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900 }}>{numCL(promedioM3)}</div>
-                </div>
-              </div>
-
-              <div className="spacer" />
-
-              <div className="row" style={{ alignItems: "stretch", gap: 14 }}>
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Top 5 productos por m³</div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Producto</th>
-                        <th style={{ textAlign: "right" }}>m³</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {topProductos.map((r, idx) => (
-                        <tr key={idx}>
-                          <td>{r.producto}</td>
-                          <td style={{ textAlign: "right" }}>{numCL(r.m3)}</td>
-                        </tr>
-                      ))}
-                      {topProductos.length === 0 && (
-                        <tr>
-                          <td className="muted" colSpan={2}>
-                            Sin datos
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Top 5 clientes por m³</div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Cliente</th>
-                        <th style={{ textAlign: "right" }}>m³</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {topClientes.map((r, idx) => (
-                        <tr key={idx}>
-                          <td>{r.cliente}</td>
-                          <td style={{ textAlign: "right" }}>{numCL(r.m3)}</td>
-                        </tr>
-                      ))}
-                      {topClientes.length === 0 && (
-                        <tr>
-                          <td className="muted" colSpan={2}>
-                            Sin datos
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Medio de pago (cantidad de guías)</div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Medio</th>
-                        <th style={{ textAlign: "right" }}>Guías</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {medioPagoCountRows.map((r, idx) => (
-                        <tr key={idx}>
-                          <td>{r.medio}</td>
-                          <td style={{ textAlign: "right" }}>{r.guias}</td>
-                        </tr>
-                      ))}
-                      {medioPagoCountRows.length === 0 && (
-                        <tr>
-                          <td className="muted" colSpan={2}>
-                            Sin datos
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ fontSize: 42, fontWeight: 900, marginBottom: 6 }}>Reporte de Facturación</div>
-              <div className="muted" style={{ marginBottom: 16 }}>
-                Resumen por cliente: facturado vs pendiente (sin planillas extra)
-              </div>
-
-              <div className="row" style={{ gap: 14 }}>
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div className="muted" style={{ fontWeight: 800 }}>
-                    Total facturado (rango)
-                  </div>
-                  <div style={{ fontSize: 34, fontWeight: 900 }}>{clp(totalFacturado)}</div>
-                </div>
-
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div className="muted" style={{ fontWeight: 800 }}>
-                    Total pendiente
-                  </div>
-                  <div style={{ fontSize: 34, fontWeight: 900 }}>{clp(totalPendiente)}</div>
-                </div>
-
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div className="muted" style={{ fontWeight: 800 }}>
-                    Guías en crédito
-                  </div>
-                  <div style={{ fontSize: 34, fontWeight: 900 }}>{guiasCredito}</div>
-                </div>
-
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div className="muted" style={{ fontWeight: 800 }}>
-                    Guías por cobrar (pendientes)
-                  </div>
-                  <div style={{ fontSize: 34, fontWeight: 900 }}>{guiasPorCobrar}</div>
-                </div>
-              </div>
-
-              <div className="spacer" />
-
-              <div className="row" style={{ alignItems: "stretch", gap: 14 }}>
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Top 5 deuda (clientes con más pendiente)</div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Cliente</th>
-                        <th style={{ textAlign: "right" }}>Pendiente</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {topDeuda.map((r) => (
-                        <tr key={r.cliente}>
-                          <td style={{ fontWeight: 900 }}>{r.cliente}</td>
-                          <td style={{ textAlign: "right", fontWeight: 900 }}>{clp(r.pendiente)}</td>
-                        </tr>
-                      ))}
-                      {topDeuda.length === 0 && (
-                        <tr>
-                          <td className="muted" colSpan={2}>
-                            No hay deuda en el rango
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="card" style={{ flex: 1, padding: 16 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Medios de pago (guías y $)</div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Medio</th>
-                        <th style={{ textAlign: "right" }}>Guías</th>
-                        <th style={{ textAlign: "right" }}>$ total</th>
-                        <th style={{ textAlign: "right" }}>Pendientes</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {medioPagoMoneyRows.map((r, idx) => (
-                        <tr key={idx}>
-                          <td>{r.medio}</td>
-                          <td style={{ textAlign: "right" }}>{r.guias}</td>
-                          <td style={{ textAlign: "right" }}>{clp(r.total)}</td>
-                          <td style={{ textAlign: "right" }}>{r.pendientes}</td>
-                        </tr>
-                      ))}
-                      {medioPagoMoneyRows.length === 0 && (
-                        <tr>
-                          <td className="muted" colSpan={4}>
-                            Sin datos
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="spacer" />
-
-              <div className="card" style={{ padding: 16 }}>
-                <div style={{ fontWeight: 900, marginBottom: 6 }}>Resumen por cliente</div>
-                <div className="muted" style={{ marginBottom: 12 }}>
-                  Calculado como suma de (m³ * precio por m³) de los items de cada guía.
-                  {soloPendientes ? " (Filtro activo: solo clientes con pendiente > 0)" : ""}
-                </div>
-
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Cliente</th>
-                      <th style={{ textAlign: "right" }}>Facturado</th>
-                      <th style={{ textAlign: "right" }}>Pendiente</th>
-                      <th>Estado</th>
-                      <th style={{ width: 160 }}>Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {clientesFactRows.map((r) => (
-                      <tr key={r.cliente}>
-                        <td style={{ fontWeight: 900 }}>{r.cliente}</td>
-                        <td style={{ textAlign: "right" }}>{clp(r.facturado)}</td>
-                        <td style={{ textAlign: "right" }}>{clp(r.pendiente)}</td>
-                        <td style={{ fontWeight: 900 }}>{r.estado}</td>
-                        <td>
-                          <Link className="btn btnGhost" href={guiasClienteUrl(r.cliente)}>
-                            Ver guías
-                          </Link>
-                        </td>
-                      </tr>
-                    ))}
-                    {clientesFactRows.length === 0 && (
-                      <tr>
-                        <td className="muted" colSpan={5}>
-                          Sin datos
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-
-                <div className="muted" style={{ marginTop: 10 }}>
-                  Este botón abre la lista de guías filtrada por cliente + rango (ideal para revisar y cobrar).
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+      {tab === "dashboard" && <DashboardTab desde={desde} hasta={hasta} data={dashboard} />}
+      {tab === "facturacion" && <FacturacionTab desde={desde} hasta={hasta} data={facturacion} />}
+      {tab === "produccion" && <ProduccionTab desde={desde} hasta={hasta} data={produccion} />}
     </div>
   );
 }
