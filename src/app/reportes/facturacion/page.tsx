@@ -1,203 +1,252 @@
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
-type Guia = {
+type GuiaRow = {
   id: string;
   fecha: string | null;
-  medio_pago: string | null;
-  estado_facturacion: string | null;
+  cliente_id: string | null;
+  medio_pago: string | null; // incluye CREDITO
+  estado_facturacion: string | null; // FACTURADO | PENDIENTE (o null)
   clientes?: { nombre: string } | null;
 };
 
-type Item = {
-  id: string;
+type ItemRow = {
   guia_id: string;
-  cantidad_m3: number;
+  cantidad_m3: number | null;
   precio_m3: number | null;
 };
 
-function yyyyMmDd(d: Date) {
+function ymd(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
-function fmtMoneyCLP(n: number) {
-  const rounded = Math.round(n);
-  return "$ " + rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+function parseDateParam(v: string | string[] | undefined) {
+  if (!v) return null;
+  const s = Array.isArray(v) ? v[0] : v;
+  // esperamos YYYY-MM-DD
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  return s;
+}
+
+function moneyCLP(n: number) {
+  // sin decimales, formato CLP
+  return n.toLocaleString("es-CL", { maximumFractionDigits: 0 });
+}
+
+function isFacturado(v: string | null) {
+  return (v ?? "").toUpperCase() === "FACTURADO";
 }
 
 export default async function ReporteFacturacionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ desde?: string; hasta?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
-  const hoy = new Date();
-  const desde = sp.desde ?? yyyyMmDd(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
-  const hasta = sp.hasta ?? yyyyMmDd(hoy);
 
-  // 1) Guías con cliente + estado + medio_pago
-  const { data: guiasData, error: gErr } = await supabase
+  // Rango por querystring: ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD
+  const hoy = new Date();
+  const defaultDesde = ymd(hoy);
+  const defaultHasta = ymd(hoy);
+
+  const desde = parseDateParam(sp.desde) ?? defaultDesde;
+  const hasta = parseDateParam(sp.hasta) ?? defaultHasta;
+
+  // 1) Traer guías del rango (incluye nombre cliente)
+  const { data: guiasData, error: guiasErr } = await supabase
     .from("guias")
-    .select("id, fecha, medio_pago, estado_facturacion, clientes(nombre)")
+    .select("id, fecha, cliente_id, medio_pago, estado_facturacion, clientes(nombre)")
     .gte("fecha", desde)
     .lte("fecha", hasta)
     .order("fecha", { ascending: true });
 
-  if (gErr) {
+  if (guiasErr) {
     return (
-      <div>
-        <h2 style={{ marginTop: 0 }}>Reporte de Facturación</h2>
-        <div className="muted">Error consultando guías: {gErr.message}</div>
+      <div className="container">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div>
+            <h1 className="pageTitle">Reporte de Facturación</h1>
+            <div className="muted">Mostrando desde {desde} hasta {hasta}</div>
+          </div>
+          <Link href="/guias" className="btn btnGhost">
+            ← Volver a Guías
+          </Link>
+        </div>
+
+        <div className="spacer" />
+        <div className="card section">
+          <h2 style={{ marginTop: 0 }}>Error</h2>
+          <div className="muted">
+            No se pudo leer la tabla <b>guias</b>.
+          </div>
+          <div className="muted" style={{ marginTop: 10 }}>
+            message: {(guiasErr as any)?.message ?? "-"} / code: {(guiasErr as any)?.code ?? "-"}
+          </div>
+        </div>
       </div>
     );
   }
 
-  const guias = (guiasData ?? []) as Guia[];
+  const guias = (guiasData ?? []) as GuiaRow[];
   const guiaIds = guias.map((g) => g.id);
 
-  // 2) Items con precio (para calcular montos)
-  let items: Item[] = [];
+  // 2) Traer items para calcular $ (cantidad_m3 * precio_m3)
+  //    OJO: esto asume que guia_items tiene columnas: guia_id, cantidad_m3, precio_m3
+  let items: ItemRow[] = [];
   if (guiaIds.length > 0) {
-    const { data: itemsData, error: iErr } = await supabase
+    const { data: itemsData, error: itemsErr } = await supabase
       .from("guia_items")
-      .select("id, guia_id, cantidad_m3, precio_m3")
+      .select("guia_id, cantidad_m3, precio_m3")
       .in("guia_id", guiaIds);
 
-    if (!iErr) items = (itemsData ?? []) as Item[];
+    if (!itemsErr) {
+      items = (itemsData ?? []) as ItemRow[];
+    }
   }
 
-  // 3) Total por guía = sum(cantidad_m3 * precio_m3)
+  // 3) Total por guía
   const totalPorGuia = new Map<string, number>();
   for (const it of items) {
+    const gid = it.guia_id;
+    const m3 = Number(it.cantidad_m3 ?? 0);
     const precio = Number(it.precio_m3 ?? 0);
-    const cant = Number(it.cantidad_m3 ?? 0);
-    totalPorGuia.set(it.guia_id, (totalPorGuia.get(it.guia_id) ?? 0) + cant * precio);
+    const subtotal = m3 * precio;
+
+    totalPorGuia.set(gid, (totalPorGuia.get(gid) ?? 0) + subtotal);
   }
 
-  // 4) Agrupar por cliente (equivalente a “Clientes Febrero 2026”)
-  type Row = { cliente: string; facturado: number; pendiente: number; creditoGuias: number };
-  const byCliente = new Map<string, Row>();
+  // 4) KPIs
+  const totalFacturado = guias.reduce((acc, g) => {
+    const t = totalPorGuia.get(g.id) ?? 0;
+    return isFacturado(g.estado_facturacion) ? acc + t : acc;
+  }, 0);
 
-  let totalFacturado = 0;
-  let totalPendiente = 0;
-  let guiasCredito = 0;
+  const totalPendiente = guias.reduce((acc, g) => {
+    const t = totalPorGuia.get(g.id) ?? 0;
+    return isFacturado(g.estado_facturacion) ? acc : acc + t;
+  }, 0);
+
+  const guiasCredito = guias.filter((g) => (g.medio_pago ?? "").toUpperCase() === "CREDITO").length;
+
+  // 5) Resumen por cliente
+  type RowCliente = {
+    cliente: string;
+    facturado: number;
+    pendiente: number;
+    estado: "OK" | "Pendiente";
+  };
+
+  const mapCliente = new Map<string, RowCliente>();
 
   for (const g of guias) {
-    const cli = g.clientes?.nombre ?? "SIN CLIENTE";
-    const estado = (g.estado_facturacion ?? "PENDIENTE").toUpperCase();
-    const pago = (g.medio_pago ?? "").toUpperCase();
+    const nombre = g.clientes?.nombre ?? "(Sin cliente)";
+    const key = nombre;
+    const row = mapCliente.get(key) ?? {
+      cliente: nombre,
+      facturado: 0,
+      pendiente: 0,
+      estado: "OK",
+    };
+
     const total = totalPorGuia.get(g.id) ?? 0;
 
-    if (!byCliente.has(cli)) byCliente.set(cli, { cliente: cli, facturado: 0, pendiente: 0, creditoGuias: 0 });
-    const row = byCliente.get(cli)!;
+    if (isFacturado(g.estado_facturacion)) row.facturado += total;
+    else row.pendiente += total;
 
-    if (pago === "CREDITO") {
-      row.creditoGuias += 1;
-      guiasCredito += 1;
-    }
-
-    if (estado === "FACTURADO") {
-      row.facturado += total;
-      totalFacturado += total;
-    } else {
-      row.pendiente += total;
-      totalPendiente += total;
-    }
+    row.estado = row.pendiente > 0 ? "Pendiente" : "OK";
+    mapCliente.set(key, row);
   }
 
-  const rows = [...byCliente.values()].sort((a, b) => (b.facturado + b.pendiente) - (a.facturado + a.pendiente));
+  const filasClientes = Array.from(mapCliente.values()).sort((a, b) => {
+    // primero pendientes altos, luego facturado
+    if (b.pendiente !== a.pendiente) return b.pendiente - a.pendiente;
+    return b.facturado - a.facturado;
+  });
 
+  // UI
   return (
-    <div>
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end" }}>
+    <div className="container">
+      <div className="row" style={{ justifyContent: "space-between" }}>
         <div>
-          <h2 style={{ marginTop: 0, marginBottom: 6 }}>Reporte de Facturación</h2>
+          <h1 className="pageTitle">Reporte de Facturación</h1>
           <div className="muted">
-            Resumen por cliente: facturado vs pendiente (equivalente a tu planilla “Clientes Febrero 2026”)
+            Resumen por cliente: <b>facturado vs pendiente</b> (sin planillas extra)
           </div>
           <div className="muted" style={{ marginTop: 6 }}>
             Mostrando desde <b>{desde}</b> hasta <b>{hasta}</b>
           </div>
         </div>
 
-        <form action="/reportes/facturacion" method="get" className="row">
-          <div>
-            <div className="muted" style={{ fontWeight: 700 }}>Desde</div>
-            <input className="input" type="date" name="desde" defaultValue={desde} />
-          </div>
-          <div>
-            <div className="muted" style={{ fontWeight: 700 }}>Hasta</div>
-            <input className="input" type="date" name="hasta" defaultValue={hasta} />
-          </div>
-          <button className="btn btnPrimary" type="submit">Aplicar</button>
-        </form>
+        <Link href="/guias" className="btn btnGhost">
+          ← Volver a Guías
+        </Link>
       </div>
 
       <div className="spacer" />
 
-      <div className="grid3">
-        <div className="kpi card">
-          <div className="kpiLabel">Total facturado (rango)</div>
-          <div className="kpiValue">{fmtMoneyCLP(totalFacturado)}</div>
+      {/* KPIs */}
+      <div className="row">
+        <div className="card section" style={{ flex: "1 1 240px" }}>
+          <div className="muted">Total facturado (rango)</div>
+          <div style={{ fontSize: 34, fontWeight: 900, marginTop: 6 }}>${moneyCLP(totalFacturado)}</div>
         </div>
-        <div className="kpi card">
-          <div className="kpiLabel">Total pendiente</div>
-          <div className="kpiValue">{fmtMoneyCLP(totalPendiente)}</div>
+
+        <div className="card section" style={{ flex: "1 1 240px" }}>
+          <div className="muted">Total pendiente</div>
+          <div style={{ fontSize: 34, fontWeight: 900, marginTop: 6 }}>${moneyCLP(totalPendiente)}</div>
         </div>
-        <div className="kpi card">
-          <div className="kpiLabel">Guías en crédito / por cobrar</div>
-          <div className="kpiValue">{guiasCredito}</div>
+
+        <div className="card section" style={{ flex: "1 1 240px" }}>
+          <div className="muted">Guías en crédito / por cobrar</div>
+          <div style={{ fontSize: 34, fontWeight: 900, marginTop: 6 }}>{guiasCredito}</div>
         </div>
       </div>
 
       <div className="spacer" />
 
-      <div className="card" style={{ padding: 16 }}>
-        <div style={{ fontWeight: 900, marginBottom: 10 }}>Resumen por cliente</div>
-
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Cliente</th>
-              <th style={{ textAlign: "right" }}>Facturado</th>
-              <th style={{ textAlign: "right" }}>Pendiente</th>
-              <th style={{ textAlign: "right" }}>Crédito</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.cliente}>
-                <td style={{ fontWeight: 800 }}>{r.cliente}</td>
-                <td style={{ textAlign: "right" }}>{fmtMoneyCLP(r.facturado)}</td>
-                <td style={{ textAlign: "right" }}>{fmtMoneyCLP(r.pendiente)}</td>
-                <td style={{ textAlign: "right" }}>{r.creditoGuias}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={4} className="muted">
-                  Sin datos en el rango seleccionado.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-
-        <div className="spacer" />
-
-        <div className="row">
-          <button className="btn" disabled>
-            Exportar CSV (próximo)
-          </button>
-          <button className="btn" disabled>
-            Marcar como facturado (próximo)
-          </button>
+      {/* Tabla por cliente */}
+      <div className="card">
+        <div className="toolbar">
+          <div style={{ fontWeight: 900, fontSize: 18 }}>Resumen por cliente</div>
+          <div className="muted" style={{ marginTop: 4 }}>
+            Calculado como suma de (m³ * precio por m³) en los items de cada guía.
+          </div>
         </div>
 
-        <div className="muted" style={{ marginTop: 10 }}>
-          Este reporte se arma 100% desde las guías (sin planillas extra).
+        <div className="section">
+          {filasClientes.length === 0 ? (
+            <div className="muted">No hay guías en este rango.</div>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th style={{ textAlign: "right" }}>Facturado</th>
+                  <th style={{ textAlign: "right" }}>Pendiente</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filasClientes.map((r) => (
+                  <tr key={r.cliente}>
+                    <td style={{ fontWeight: 800 }}>{r.cliente}</td>
+                    <td style={{ textAlign: "right" }}>${moneyCLP(r.facturado)}</td>
+                    <td style={{ textAlign: "right" }}>${moneyCLP(r.pendiente)}</td>
+                    <td style={{ fontWeight: 800 }}>{r.estado}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="spacer" />
+
+          <div className="muted">
+            Siguiente paso (cuando quieras): exportar CSV y botón “Marcar como facturado” directo desde esta tabla.
+          </div>
         </div>
       </div>
     </div>
