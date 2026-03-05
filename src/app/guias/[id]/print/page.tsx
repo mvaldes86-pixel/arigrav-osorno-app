@@ -78,7 +78,7 @@ export default async function PrintTicketPage({
     productosMap = new Map(prods.map((p) => [p.id, p.nombre]));
   }
 
-  const g = guia as Guia;
+  const g = guia as unknown as Guia;
   const checks = medioPagoChecks(g.medio_pago);
 
   const fecha = g.fecha ?? "";

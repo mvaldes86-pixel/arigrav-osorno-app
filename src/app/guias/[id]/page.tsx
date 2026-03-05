@@ -96,7 +96,7 @@ export default async function GuiaDetallePage({
     }
   }
 
-  const g = guia as Guia;
+  const g = guia as unknown as Guia;
 
   const totalCalc = items.reduce((acc, it) => acc + Number(it.subtotal ?? 0), 0);
   const totalShow = (g.total ?? 0) > 0 ? Number(g.total) : totalCalc;

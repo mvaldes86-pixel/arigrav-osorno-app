@@ -56,7 +56,7 @@ export default async function ReporteDashboardPage({
     );
   }
 
-  const guiaList = (guias ?? []) as Guia[];
+  const guiaList = (guias ?? []) as unknown as Guia[];
   const guiaIds = guiaList.map((g) => g.id);
 
   // Items del rango (por IN)

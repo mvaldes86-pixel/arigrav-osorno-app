@@ -34,7 +34,7 @@ export default async function GuiasPage({
     .lte("fecha", hasta)
     .order("numero", { ascending: false });
 
-  const guias = (data ?? []) as GuiaRow[];
+  const guias = (data ?? []) as unknown as GuiaRow[];
 
   return (
     <>

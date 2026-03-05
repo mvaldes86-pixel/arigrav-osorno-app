@@ -32,12 +32,12 @@ type GuiaRow = {
   clientes?: { nombre: string } | null;
 
   medio_pago:
-    | "BANCO_CHILE"
-    | "BANCO_ESTADO"
-    | "EFECTIVO"
-    | "CREDITO"
-    | string
-    | null;
+  | "BANCO_CHILE"
+  | "BANCO_ESTADO"
+  | "EFECTIVO"
+  | "CREDITO"
+  | string
+  | null;
 
   estado_facturacion: "PENDIENTE" | "PAGADO" | string | null;
 
@@ -160,7 +160,7 @@ async function fetchGuiasEnRango(desde: string, hasta: string) {
     .order("fecha", { ascending: true });
 
   if (error) throw error;
-  return (data ?? []) as GuiaRow[];
+  return (data ?? []) as unknown as GuiaRow[];
 }
 
 async function fetchItemsPorGuias(guiaIds: string[]) {

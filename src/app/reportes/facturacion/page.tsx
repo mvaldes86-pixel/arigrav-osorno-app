@@ -90,7 +90,7 @@ export default async function ReporteFacturacionPage({
     );
   }
 
-  const guias = (guiasData ?? []) as GuiaRow[];
+  const guias = (guiasData ?? []) as unknown as GuiaRow[];
   const guiaIds = guias.map((g) => g.id);
 
   // 2) Traer items para calcular $ (cantidad_m3 * precio_m3)
