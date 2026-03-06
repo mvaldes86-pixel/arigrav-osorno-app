@@ -21,10 +21,11 @@ body {
 }
 
 .ticketCopy {
-  width: 74mm;
+  width: 70mm;
   margin: 0 auto;
-  padding: 4mm 1.5mm 6mm;
+  padding: 5mm 3mm 6mm;
   background: #fff;
+  overflow: hidden;
 }
 
 .ticketCenter {
@@ -32,23 +33,26 @@ body {
 }
 
 .ticketLogo {
-  width: 22mm;
-  margin: 0 auto 3px;
+  width: 28mm;
+  max-width: 100%;
+  margin: 0 auto 4px;
   display: block;
 }
 
 .ticketTitle {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 900;
   letter-spacing: 0.3px;
   line-height: 1.15;
+  text-align: center;
 }
 
 .ticketSub {
-  font-size: 12px;
-  margin-top: 1px;
+  font-size: 11px;
+  margin-top: 2px;
   font-weight: 700;
   line-height: 1.1;
+  text-align: center;
 }
 
 .ticketDash {
@@ -61,20 +65,22 @@ body {
   justify-content: space-between;
   align-items: flex-start;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11px;
   margin: 3px 0;
-  line-height: 1.2;
+  line-height: 1.25;
 }
 
 .ticketRow > div:first-child {
   flex: 1 1 auto;
   min-width: 0;
+  word-break: break-word;
 }
 
 .ticketRow > div:last-child {
   flex: 0 0 auto;
   white-space: nowrap;
   text-align: right;
+  padding-left: 6px;
 }
 
 .ticketLabel {
@@ -82,7 +88,7 @@ body {
 }
 
 .ticketSectionTitle {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
   margin-bottom: 4px;
   text-align: center;
@@ -93,7 +99,7 @@ body {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .ticketTable th {
@@ -113,54 +119,56 @@ body {
 
 .ticketTable th:first-child,
 .ticketTable td:first-child {
-  width: 70%;
-  padding-right: 6px;
+  width: 68%;
+  padding-right: 8px;
   word-break: break-word;
 }
 
 .ticketTable th:last-child,
 .ticketTable td:last-child {
-  width: 30%;
+  width: 32%;
   text-align: right;
   white-space: nowrap;
 }
 
 .ticketPay {
-  margin-top: 5px;
-  font-size: 12px;
+  margin-top: 6px;
+  font-size: 11px;
 }
 
 .ticketPayTitle {
   text-align: center;
   font-weight: 900;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
 }
 
 .ticketCheckRow {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin: 2px 0;
+  gap: 8px;
+  margin: 3px 0;
   font-weight: 700;
-  line-height: 1.2;
+  line-height: 1.25;
+  padding-left: 2px;
 }
 
 .ticketBox {
-  width: 11px;
-  height: 11px;
+  width: 12px;
+  height: 12px;
+  min-width: 12px;
   border: 1px solid #000;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 9px;
-  line-height: 11px;
-  flex: 0 0 11px;
+  line-height: 12px;
+  flex: 0 0 12px;
 }
 
 .ticketSignTitle {
   margin-top: 10px;
   text-align: center;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
 }
 
@@ -170,16 +178,17 @@ body {
 }
 
 .ticketCopyLabel {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 900;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .ticketId {
-  font-size: 9px;
+  font-size: 8px;
   margin-top: 3px;
   font-weight: 700;
   word-break: break-all;
+  line-height: 1.2;
 }
 
 .pageBreak {

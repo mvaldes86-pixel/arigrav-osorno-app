@@ -9,8 +9,8 @@ export default function AppHeader() {
           <Image
             src="/arigrav-logo.png"
             alt="ARIGRAV"
-            width={140}
-            height={40}
+            width={200}
+            height={60}
             priority
             className="brand__logo"
           />

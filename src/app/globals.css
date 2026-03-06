@@ -61,8 +61,8 @@ a:hover{ text-decoration:underline; }
 }
 
 .brandLogo{
-  width: 90px;
-  height: auto;
+  width:140px;
+  height:auto;
   display:block;
 }
 
@@ -200,8 +200,9 @@ input, select, button{
 }
 
 /* ==========================
-   REPORTES (UI helpers)
+   REPORTES
    ========================== */
+
 .tabs{
   display:flex;
   gap:10px;
@@ -277,7 +278,6 @@ input, select, button{
   border-radius: 14px;
   background:#fff;
   padding: 14px;
-  box-shadow: 0 8px 18px rgba(14, 22, 40, 0.04);
 }
 
 .kpiLabel{
@@ -290,7 +290,6 @@ input, select, button{
   margin-top: 6px;
   font-size: 34px;
   font-weight: 900;
-  letter-spacing: 0.2px;
 }
 
 .grid3{
@@ -299,25 +298,16 @@ input, select, button{
   gap: 12px;
 }
 
-@media (max-width: 980px){
-  .grid3{ grid-template-columns: 1fr; }
-}
-
 .grid2{
   display:grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
-@media (max-width: 980px){
-  .grid2{ grid-template-columns: 1fr; }
-}
-
 .cardInner{
   border:1px solid var(--line);
   border-radius: 14px;
   background:#fff;
-  box-shadow: 0 8px 18px rgba(14, 22, 40, 0.04);
   overflow:hidden;
 }
 
@@ -325,7 +315,6 @@ input, select, button{
   padding: 14px 16px;
   font-weight: 900;
   border-bottom:1px solid var(--line);
-  background:#ffffff;
 }
 
 .bar{
@@ -333,8 +322,6 @@ input, select, button{
   height: 10px;
   border-radius: 999px;
   background: #eef2f8;
-  border: 1px solid var(--line);
-  overflow:hidden;
 }
 
 .barFill{
@@ -348,7 +335,54 @@ input, select, button{
   padding: 8px 12px;
   font-weight: 800;
   background:#fff;
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
+}
+
+/* =================================
+   IMPRESION PARA TICKET 80mm
+   ================================= */
+
+@media print {
+
+  @page{
+    size: 80mm auto;
+    margin:0;
+  }
+
+  html, body{
+    width:80mm;
+    margin:0;
+    padding:0;
+    background:#fff;
+  }
+
+  .container{
+    width:80mm !important;
+    max-width:80mm !important;
+    margin:0;
+    padding:4px !important;
+  }
+
+  .header,
+  .nav,
+  .btn,
+  .toolbar,
+  .tabs{
+    display:none !important;
+  }
+
+  .card{
+    border:none;
+    box-shadow:none;
+  }
+
+  .table{
+    width:100%;
+    font-size:12px;
+  }
+
+  .pageTitle{
+    font-size:18px;
+    text-align:center;
+  }
+
 }
