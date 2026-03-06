@@ -203,7 +203,7 @@ function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string
       <div className="toolbar">
         <div>
           <div style={{ fontWeight: 900, fontSize: 16 }}>Selecciona el tipo de reporte</div>
-          <div className="muted">Reportes base del Plan Control Operativo</div>
+
         </div>
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -238,9 +238,7 @@ function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string
           </Link>
         </div>
 
-        <div className="muted" style={{ marginTop: 10 }}>
-          Tip: después agregamos más pestañas sin tocar el diseño (pagos, obras/faenas, etc.)
-        </div>
+
       </div>
     </div>
   );
@@ -250,9 +248,7 @@ function RangeBox({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: st
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <div className="section">
-        <div className="muted" style={{ marginBottom: 10 }}>
-          Mostrando desde <strong>{desde}</strong> hasta <strong>{hasta}</strong>
-        </div>
+
 
         <div className="rangeBox">
           <div className="rangeLeft">
@@ -401,9 +397,7 @@ function DashboardTab({
     <div className="card" style={{ marginTop: 14 }}>
       <div className="section">
         <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Dashboard Operativo</h2>
-        <div className="muted" style={{ marginTop: 6 }}>
-          Vista general rápida del desempeño (base para el Plan 1)
-        </div>
+
 
         <div className="kpiGrid" style={{ marginTop: 16 }}>
           <KPI label="Total m³" value={formatNumber(data.totalM3, 2)} />
