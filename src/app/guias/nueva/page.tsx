@@ -48,7 +48,7 @@ function todayChileYYYYMMDD() {
 }
 
 function toNumberSafe(v: string) {
-  const x = v.replace(",", ".").trim();
+  const x = String(v ?? "").replace(",", ".").trim();
   const n = Number(x);
   return Number.isFinite(n) ? n : 0;
 }
@@ -235,6 +235,8 @@ export default function NuevaGuiaPage() {
   const [transporteId, setTransporteId] = useState<string>("");
   const [transporteManual, setTransporteManual] = useState<string>("");
 
+  const [valorFlete, setValorFlete] = useState<string>("");
+
   const [faena, setFaena] = useState("");
   const [chofer, setChofer] = useState("");
   const [patente, setPatente] = useState("");
@@ -314,9 +316,7 @@ export default function NuevaGuiaPage() {
   async function resolverClienteId() {
     const clienteNombreManual = normalizeText(clienteManual);
 
-    if (clienteId) {
-      return clienteId;
-    }
+    if (clienteId) return clienteId;
 
     if (!clienteNombreManual) {
       throw new Error("Selecciona un cliente o escribe uno nuevo.");
@@ -372,6 +372,63 @@ export default function NuevaGuiaPage() {
     return nuevoCliente.id;
   }
 
+  async function resolverTransporteId() {
+    const transporteNombreManual = normalizeText(transporteManual);
+
+    if (transporteId) return transporteId;
+
+    if (!transporteNombreManual) return null;
+
+    const transporteExistente = transportes.find(
+      (t) => normalizeText(t.nombre).toLowerCase() === transporteNombreManual.toLowerCase()
+    );
+
+    if (transporteExistente) {
+      setTransporteId(transporteExistente.id);
+      setTransporteManual("");
+      return transporteExistente.id;
+    }
+
+    const insT = await supabase
+      .from("transportes")
+      .insert({ nombre: transporteNombreManual })
+      .select("id, nombre")
+      .single();
+
+    if (insT.error || !insT.data?.id) {
+      console.error("Supabase error insert transporte:", insT.error);
+
+      const retry = await supabase
+        .from("transportes")
+        .select("id, nombre")
+        .ilike("nombre", transporteNombreManual)
+        .limit(1)
+        .maybeSingle();
+
+      if (retry.data?.id) {
+        setTransporteId(retry.data.id);
+        setTransporteManual("");
+        return retry.data.id;
+      }
+
+      throw new Error(
+        `No se pudo crear el transporte nuevo. ${supabaseErrorText(insT.error)}`
+      );
+    }
+
+    const nuevoTransporte = insT.data as Transporte;
+
+    setTransportes((prev) => {
+      const next = [...prev, nuevoTransporte];
+      next.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+      return next;
+    });
+
+    setTransporteId(nuevoTransporte.id);
+    setTransporteManual("");
+    return nuevoTransporte.id;
+  }
+
   const onGuardar = async () => {
     try {
       setLoading(true);
@@ -405,11 +462,13 @@ export default function NuevaGuiaPage() {
       }
 
       const finalClienteId = await resolverClienteId();
+      const finalTransporteId = await resolverTransporteId();
 
       const guiaPayload = {
         fecha,
         cliente_id: finalClienteId,
-        transporte_id: transporteId || null,
+        transporte_id: finalTransporteId,
+        valor_flete: Number(toNumberSafe(valorFlete).toFixed(2)),
         faena: normalizeText(faena),
         chofer: normalizeText(chofer),
         patente: normalizeText(patente).toUpperCase(),
@@ -544,7 +603,6 @@ export default function NuevaGuiaPage() {
                   </option>
                 ))}
               </select>
-              <div style={styles.hint}>En el siguiente paso activamos transporte nuevo automático.</div>
             </div>
 
             <div style={styles.field}>
@@ -558,7 +616,20 @@ export default function NuevaGuiaPage() {
             </div>
           </div>
 
-          <div style={{ marginTop: 14 }}>
+          <div style={{ ...styles.grid2, marginTop: 14 }}>
+            <div style={styles.field}>
+              <div style={styles.label}>Valor flete</div>
+              <input
+                style={styles.input}
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Ej: 15000"
+                value={valorFlete}
+                onChange={(e) => setValorFlete(e.target.value)}
+              />
+            </div>
+
             <div style={styles.field}>
               <div style={styles.label}>Faena</div>
               <input

@@ -14,7 +14,9 @@ type Guia = {
   estado_facturacion: string | null;
   sector: string | null;
   total: number | null;
+  valor_flete: number | null;
   clientes?: { nombre: string } | null;
+  transportes?: { nombre: string } | null;
 };
 
 type GuiaItem = {
@@ -57,7 +59,7 @@ export default async function GuiaDetallePage({
   const { data: guia, error: guiaErr } = await supabase
     .from("guias")
     .select(
-      "id, numero, fecha, faena, chofer, patente, medio_pago, tipo_operacion, estado_facturacion, sector, total, clientes(nombre)"
+      "id, numero, fecha, faena, chofer, patente, medio_pago, tipo_operacion, estado_facturacion, sector, total, valor_flete, clientes(nombre), transportes(nombre)"
     )
     .eq("id", id)
     .single();
@@ -100,6 +102,7 @@ export default async function GuiaDetallePage({
 
   const totalCalc = items.reduce((acc, it) => acc + Number(it.subtotal ?? 0), 0);
   const totalShow = (g.total ?? 0) > 0 ? Number(g.total) : totalCalc;
+  const valorFleteShow = Number(g.valor_flete ?? 0);
 
   return (
     <div style={{ padding: "2rem" }}>
@@ -122,6 +125,12 @@ export default async function GuiaDetallePage({
         </p>
         <p>
           <strong>Cliente:</strong> {g.clientes?.nombre ?? "-"}
+        </p>
+        <p>
+          <strong>Transporte:</strong> {g.transportes?.nombre ?? "-"}
+        </p>
+        <p>
+          <strong>Valor flete:</strong> ${Math.round(valorFleteShow).toLocaleString("es-CL")}
         </p>
         <p>
           <strong>Faena:</strong> {g.faena ?? "-"}
