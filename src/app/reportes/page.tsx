@@ -32,17 +32,21 @@ type GuiaRow = {
   clientes?: { nombre: string } | null;
 
   medio_pago:
-  | "BANCO_CHILE"
-  | "BANCO_ESTADO"
-  | "EFECTIVO"
-  | "CREDITO"
-  | string
-  | null;
+    | "BANCO_CHILE"
+    | "BANCO_ESTADO"
+    | "EFECTIVO"
+    | "CREDITO"
+    | string
+    | null;
 
   estado_facturacion: "PENDIENTE" | "PAGADO" | string | null;
 
   chofer: string | null;
   patente: string | null;
+
+  transporte_id: string | null;
+  valor_flete: number | null;
+  transportes?: { nombre: string } | null;
 };
 
 type ItemRow = {
@@ -117,6 +121,10 @@ function getClientName(g: GuiaRow) {
   return g.clientes?.nombre ?? "(sin cliente)";
 }
 
+function getTransporteName(g: GuiaRow) {
+  return g.transportes?.nombre ?? "(sin transporte)";
+}
+
 // Diferencia en días entre hoy y la fecha YYYY-MM-DD (sin TZ rara)
 function daysAgo(fechaISO: string) {
   const start = new Date(`${fechaISO}T00:00:00`);
@@ -153,7 +161,7 @@ async function fetchGuiasEnRango(desde: string, hasta: string) {
   const { data, error } = await supabase
     .from("guias")
     .select(
-      "id, fecha, cliente_id, medio_pago, estado_facturacion, chofer, patente, clientes(nombre)"
+      "id, fecha, cliente_id, medio_pago, estado_facturacion, chofer, patente, transporte_id, valor_flete, clientes(nombre), transportes(nombre)"
     )
     .gte("fecha", desde)
     .lte("fecha", hasta)
@@ -203,7 +211,6 @@ function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string
       <div className="toolbar">
         <div>
           <div style={{ fontWeight: 900, fontSize: 16 }}>Selecciona el tipo de reporte</div>
-
         </div>
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -237,8 +244,6 @@ function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string
             Cobranza (Aging)
           </Link>
         </div>
-
-
       </div>
     </div>
   );
@@ -248,8 +253,6 @@ function RangeBox({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: st
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <div className="section">
-
-
         <div className="rangeBox">
           <div className="rangeLeft">
             <div style={{ fontWeight: 900, marginBottom: 8 }}>Rango</div>
@@ -346,6 +349,9 @@ function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
 
   const promM3Guia = guiasCount > 0 ? totalM3 / guiasCount : 0;
 
+  const totalFletes = guias.reduce((s, g) => s + safeNum(g.valor_flete), 0);
+  const promFleteGuia = guiasCount > 0 ? totalFletes / guiasCount : 0;
+
   const prodAgg = new Map<string, number>();
   for (const it of itemsOk) {
     const pid = it.producto_id ?? "";
@@ -381,7 +387,31 @@ function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
     .map(([medio, guias]) => ({ medio, guias }))
     .sort((a, b) => b.guias - a.guias);
 
-  return { totalM3, guiasCount, clientesDistintos, promM3Guia, topProductos, topClientes, mediosPago };
+  const transporteAgg = new Map<string, number>();
+  for (const g of guias) {
+    const nombre = getTransporteName(g);
+    const flete = safeNum(g.valor_flete);
+    if (flete <= 0) continue;
+    transporteAgg.set(nombre, (transporteAgg.get(nombre) ?? 0) + flete);
+  }
+
+  const topTransportes = Array.from(transporteAgg.entries())
+    .map(([transporte, totalFlete]) => ({ transporte, totalFlete }))
+    .sort((a, b) => b.totalFlete - a.totalFlete)
+    .slice(0, 5);
+
+  return {
+    totalM3,
+    guiasCount,
+    clientesDistintos,
+    promM3Guia,
+    totalFletes,
+    promFleteGuia,
+    topProductos,
+    topClientes,
+    mediosPago,
+    topTransportes,
+  };
 }
 
 function DashboardTab({
@@ -398,12 +428,13 @@ function DashboardTab({
       <div className="section">
         <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Dashboard Operativo</h2>
 
-
         <div className="kpiGrid" style={{ marginTop: 16 }}>
           <KPI label="Total m³" value={formatNumber(data.totalM3, 2)} />
           <KPI label="Guías" value={String(data.guiasCount)} />
           <KPI label="Clientes atendidos" value={String(data.clientesDistintos)} />
           <KPI label="Promedio m³ / guía" value={formatNumber(data.promM3Guia, 2)} />
+          <KPI label="Total fletes" value={formatCLP(data.totalFletes)} />
+          <KPI label="Promedio flete / guía" value={formatCLP(data.promFleteGuia)} />
           <KPI label="Desde" value={desde} />
           <KPI label="Hasta" value={hasta} />
         </div>
@@ -498,6 +529,36 @@ function DashboardTab({
 
         <div className="spacer" />
 
+        <div className="cardInner">
+          <div className="cardTitle">Top transportes por costo de flete</div>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Transporte</th>
+                <th style={{ textAlign: "right" }}>Total flete</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.topTransportes.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="muted" style={{ padding: 14 }}>
+                    Sin datos.
+                  </td>
+                </tr>
+              ) : (
+                data.topTransportes.map((r, i) => (
+                  <tr key={i}>
+                    <td>{r.transporte}</td>
+                    <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalFlete)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="spacer" />
+
         <div className="row">
           <Link className="btn" href={`/guias?desde=${desde}&hasta=${hasta}`}>
             Ver guías
@@ -543,8 +604,9 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
     const cliente = getClientName(g);
     const subtotal = safeNum(it.cantidad_m3) * safeNum(it.precio_m3);
 
-    if (!byCliente.has(cliente))
+    if (!byCliente.has(cliente)) {
       byCliente.set(cliente, { facturado: 0, pendiente: 0, estado: "Pendiente" });
+    }
     const agg = byCliente.get(cliente)!;
 
     const est = String(g.estado_facturacion ?? "").toUpperCase();
@@ -887,10 +949,11 @@ function buildCamionesChoferes(guias: GuiaRow[], items: ItemRow[]) {
     byPatente.get(pat)!.viajes += 1;
 
     const ch = normName(g.chofer);
-    if (ch)
+    if (ch) {
       byPatente
         .get(pat)!
         .choferCounts.set(ch, (byPatente.get(pat)!.choferCounts.get(ch) ?? 0) + 1);
+    }
   }
 
   for (const it of items) {
@@ -1359,7 +1422,6 @@ function buildCobranzaAging(guias: GuiaRow[], items: ItemRow[]) {
     cliente: string;
     deudaTotal: number;
     guias: Set<string>;
-    // deuda por bucket
     b0_7: number;
     b8_15: number;
     b16_30: number;
@@ -1372,7 +1434,6 @@ function buildCobranzaAging(guias: GuiaRow[], items: ItemRow[]) {
   let totalDeuda = 0;
   let totalGuiasPendientes = 0;
 
-  // contar guías pendientes
   for (const g of guias) {
     if (String(g.estado_facturacion ?? "").toUpperCase() === "PENDIENTE") totalGuiasPendientes += 1;
   }
@@ -1388,13 +1449,11 @@ function buildCobranzaAging(guias: GuiaRow[], items: ItemRow[]) {
     const subtotal = safeNum(it.cantidad_m3) * safeNum(it.precio_m3);
     const b = getBucketFromGuiaFecha(g.fecha);
 
-    // buckets globales
     const aggB = buckets.get(b)!;
     aggB.deuda += subtotal;
     aggB.guias.add(g.id);
     aggB.clientes.add(cliente);
 
-    // por cliente
     if (!byCliente.has(cliente)) {
       byCliente.set(cliente, {
         cliente,
@@ -1456,7 +1515,7 @@ function buildCobranzaAging(guias: GuiaRow[], items: ItemRow[]) {
     clientesConDeuda,
     promDeudaCliente,
     bucketRows,
-    clientesRows: clientesRows.slice(0, 25), // Top 25
+    clientesRows: clientesRows.slice(0, 25),
   };
 }
 
