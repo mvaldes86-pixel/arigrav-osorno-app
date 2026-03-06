@@ -6,11 +6,12 @@ import { supabase } from "@/lib/supabase";
 
 type Cliente = { id: string; nombre: string };
 type Producto = { id: string; nombre: string };
+type Transporte = { id: string; nombre: string };
 
 type ItemDraft = {
   producto_id: string;
-  cantidad_m3: string; // input text
-  precio_m3: string; // input text
+  cantidad_m3: string;
+  precio_m3: string;
 };
 
 const MEDIOS_PAGO = [
@@ -50,6 +51,15 @@ function toNumberSafe(v: string) {
   const x = v.replace(",", ".").trim();
   const n = Number(x);
   return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeText(v: string) {
+  return v.trim().replace(/\s+/g, " ");
+}
+
+function supabaseErrorText(err: any) {
+  if (!err) return "Error desconocido.";
+  return [err.message, err.details, err.hint].filter(Boolean).join(" | ");
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -216,10 +226,14 @@ export default function NuevaGuiaPage() {
 
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [productos, setProductos] = useState<Producto[]>([]);
+  const [transportes, setTransportes] = useState<Transporte[]>([]);
 
   const [fecha, setFecha] = useState(todayChileYYYYMMDD());
   const [clienteId, setClienteId] = useState<string>("");
   const [clienteManual, setClienteManual] = useState<string>("");
+
+  const [transporteId, setTransporteId] = useState<string>("");
+  const [transporteManual, setTransporteManual] = useState<string>("");
 
   const [faena, setFaena] = useState("");
   const [chofer, setChofer] = useState("");
@@ -244,16 +258,36 @@ export default function NuevaGuiaPage() {
         .from("clientes")
         .select("id, nombre")
         .order("nombre", { ascending: true });
-      if (c.error) console.error("Supabase error clientes:", c.error);
-      else setClientes((c.data ?? []) as Cliente[]);
+
+      if (c.error) {
+        console.error("Supabase error clientes:", c.error);
+      } else {
+        setClientes((c.data ?? []) as Cliente[]);
+      }
 
       const p = await supabase
         .from("productos")
         .select("id, nombre")
         .order("nombre", { ascending: true });
-      if (p.error) console.error("Supabase error productos:", p.error);
-      else setProductos((p.data ?? []) as Producto[]);
+
+      if (p.error) {
+        console.error("Supabase error productos:", p.error);
+      } else {
+        setProductos((p.data ?? []) as Producto[]);
+      }
+
+      const t = await supabase
+        .from("transportes")
+        .select("id, nombre")
+        .order("nombre", { ascending: true });
+
+      if (t.error) {
+        console.error("Supabase error transportes:", t.error);
+      } else {
+        setTransportes((t.data ?? []) as Transporte[]);
+      }
     };
+
     load();
   }, []);
 
@@ -277,25 +311,81 @@ export default function NuevaGuiaPage() {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
   };
 
+  async function resolverClienteId() {
+    const clienteNombreManual = normalizeText(clienteManual);
+
+    if (clienteId) {
+      return clienteId;
+    }
+
+    if (!clienteNombreManual) {
+      throw new Error("Selecciona un cliente o escribe uno nuevo.");
+    }
+
+    const clienteExistente = clientes.find(
+      (c) => normalizeText(c.nombre).toLowerCase() === clienteNombreManual.toLowerCase()
+    );
+
+    if (clienteExistente) {
+      setClienteId(clienteExistente.id);
+      setClienteManual("");
+      return clienteExistente.id;
+    }
+
+    const insC = await supabase
+      .from("clientes")
+      .insert({ nombre: clienteNombreManual })
+      .select("id, nombre")
+      .single();
+
+    if (insC.error || !insC.data?.id) {
+      console.error("Supabase error insert cliente:", insC.error);
+
+      const retry = await supabase
+        .from("clientes")
+        .select("id, nombre")
+        .ilike("nombre", clienteNombreManual)
+        .limit(1)
+        .maybeSingle();
+
+      if (retry.data?.id) {
+        setClienteId(retry.data.id);
+        setClienteManual("");
+        return retry.data.id;
+      }
+
+      throw new Error(
+        `No se pudo crear el cliente nuevo. ${supabaseErrorText(insC.error)}`
+      );
+    }
+
+    const nuevoCliente = insC.data as Cliente;
+
+    setClientes((prev) => {
+      const next = [...prev, nuevoCliente];
+      next.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+      return next;
+    });
+
+    setClienteId(nuevoCliente.id);
+    setClienteManual("");
+    return nuevoCliente.id;
+  }
+
   const onGuardar = async () => {
     try {
       setLoading(true);
 
-      const clienteNombreManual = clienteManual.trim();
-      let finalClienteId = clienteId;
-
-      if (!finalClienteId && !clienteNombreManual) {
-        alert("Selecciona un cliente o escribe uno nuevo.");
-        return;
-      }
       if (!faena.trim()) {
         alert("Faena es obligatoria.");
         return;
       }
+
       if (!chofer.trim()) {
         alert("Chofer es obligatorio.");
         return;
       }
+
       if (!patente.trim()) {
         alert("Patente es obligatoria.");
         return;
@@ -314,31 +404,15 @@ export default function NuevaGuiaPage() {
         return;
       }
 
-      if (!finalClienteId && clienteNombreManual) {
-        const insC = await supabase
-          .from("clientes")
-          .insert({ nombre: clienteNombreManual })
-          .select("id")
-          .single();
+      const finalClienteId = await resolverClienteId();
 
-        if (insC.error || !insC.data?.id) {
-          console.error("Supabase error insert cliente:", insC.error);
-          alert("No se pudo crear el cliente nuevo.");
-          return;
-        }
-
-        finalClienteId = insC.data.id;
-        setClientes((prev) => [{ id: finalClienteId!, nombre: clienteNombreManual }, ...prev]);
-        setClienteId(finalClienteId);
-        setClienteManual("");
-      }
-
-      const guiaPayload: any = {
+      const guiaPayload = {
         fecha,
         cliente_id: finalClienteId,
-        faena: faena.trim(),
-        chofer: chofer.trim(),
-        patente: patente.trim(),
+        transporte_id: transporteId || null,
+        faena: normalizeText(faena),
+        chofer: normalizeText(chofer),
+        patente: normalizeText(patente).toUpperCase(),
         medio_pago: medioPago,
         tipo_operacion: tipoOperacion,
         estado_facturacion: estadoFacturacion,
@@ -347,11 +421,15 @@ export default function NuevaGuiaPage() {
         usuario: "operador",
       };
 
-      const g = await supabase.from("guias").insert(guiaPayload).select("id").single();
+      const g = await supabase
+        .from("guias")
+        .insert(guiaPayload)
+        .select("id")
+        .single();
 
       if (g.error || !g.data?.id) {
         console.error("Supabase error insert guia:", g.error);
-        alert("No se pudo guardar la guía.");
+        alert(`No se pudo guardar la guía. ${supabaseErrorText(g.error)}`);
         return;
       }
 
@@ -369,12 +447,19 @@ export default function NuevaGuiaPage() {
 
       if (insItems.error) {
         console.error("Supabase error insert items:", insItems.error);
-        alert("La guía se guardó, pero falló el detalle de items.");
+        alert(
+          `La guía se guardó, pero falló el detalle de items. ${supabaseErrorText(
+            insItems.error
+          )}`
+        );
         router.push(`/guias/${guiaId}`);
         return;
       }
 
       router.push(`/guias/${guiaId}`);
+    } catch (err: any) {
+      console.error("Error guardando guía:", err);
+      alert(err?.message ?? "No se pudo guardar la guía.");
     } finally {
       setLoading(false);
     }
@@ -440,6 +525,35 @@ export default function NuevaGuiaPage() {
                 placeholder="Ej: Constructora X"
                 value={clienteManual}
                 onChange={(e) => setClienteManual(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div style={{ ...styles.grid2, marginTop: 14 }}>
+            <div style={styles.field}>
+              <div style={styles.label}>Transporte</div>
+              <select
+                style={styles.select}
+                value={transporteId}
+                onChange={(e) => setTransporteId(e.target.value)}
+              >
+                <option value="">— Seleccionar —</option>
+                {transportes.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.nombre}
+                  </option>
+                ))}
+              </select>
+              <div style={styles.hint}>En el siguiente paso activamos transporte nuevo automático.</div>
+            </div>
+
+            <div style={styles.field}>
+              <div style={styles.label}>Transporte nuevo (manual)</div>
+              <input
+                style={styles.input}
+                placeholder="Ej: Transportes Lagos"
+                value={transporteManual}
+                onChange={(e) => setTransporteManual(e.target.value)}
               />
             </div>
           </div>
@@ -513,6 +627,7 @@ export default function NuevaGuiaPage() {
                 onChange={(e) => setChofer(e.target.value)}
               />
             </div>
+
             <div style={styles.field}>
               <div style={styles.label}>Patente</div>
               <input
