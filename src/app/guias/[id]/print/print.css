@@ -1,88 +1,168 @@
-﻿/* ====== Base layout ====== */
-.appHeader {
-  width: 100%;
-  border-bottom: 1px solid #e6e6e6;
+﻿html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #fff;
+  color: #000;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+@page {
+  size: 80mm auto;
+  margin: 0;
+}
+
+.printSheet {
+  width: 80mm;
+  margin: 0 auto;
+  padding: 0;
+}
+
+.ticketCopy {
+  width: 72mm;
+  margin: 0 auto;
+  padding: 6mm 0;
   background: #fff;
 }
 
-.appHeader__inner {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 14px 18px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+.ticketCenter {
+  text-align: center;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.ticketLogo {
+  width: 30mm;
+  margin: 0 auto 4px;
+  display: block;
 }
 
-.brand__logo {
-  height: auto;
-  width: auto;
-  max-height: 36px;
-}
-
-.brand__title {
+.ticketTitle {
+  font-size: 13px;
   font-weight: 800;
-  font-size: 16px;
-  line-height: 1.1;
+  letter-spacing: 0.2px;
 }
 
-.brand__subtitle {
-  font-size: 12px;
-  opacity: 0.75;
+.ticketSub {
+  font-size: 11px;
   margin-top: 2px;
 }
 
-.nav {
+.ticketDash {
+  border-top: 1px dashed #000;
+  margin: 6px 0;
+}
+
+.ticketRow {
   display: flex;
-  gap: 10px;
-  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  margin: 2px 0;
 }
 
-.nav__link {
-  text-decoration: none;
-  color: #111;
+.ticketLabel {
   font-weight: 700;
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid #eaeaea;
-  background: #fff;
 }
 
-.nav__link:hover {
-  background: #f6f6f6;
+.ticketSectionTitle {
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 4px;
 }
 
-.appMain {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 22px 18px 40px;
+.ticketTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
 }
 
-/* =========================================================
-   PRINT: Ocultar header/nav y cualquier elemento "noPrint"
-   ========================================================= */
-@media print {
-  .noPrint,
-  header.noPrint,
-  .appHeader,
-  .appHeader * {
-    display: none !important;
-    visibility: hidden !important;
-    height: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
+.ticketTable th {
+  text-align: left;
+  padding: 4px 0;
+  border-bottom: 1px solid #000;
+}
+
+.ticketTable td {
+  padding: 4px 0;
+  border-bottom: 1px dotted #bbb;
+}
+
+.ticketTable th:last-child,
+.ticketTable td:last-child {
+  text-align: right;
+}
+
+.ticketPay {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.ticketPayTitle {
+  text-align: center;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.ticketCheckRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0;
+}
+
+.ticketBox {
+  width: 10px;
+  height: 10px;
+  border: 1px solid #000;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 10px;
+}
+
+.ticketSignTitle {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.ticketSignLine {
+  margin: 24px 0 8px;
+  border-top: 1px solid #000;
+}
+
+.ticketCopyLabel {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ticketId {
+  font-size: 9px;
+  margin-top: 4px;
+  opacity: 0.85;
+}
+
+/* clave para que corte entre copias */
+.pageBreak {
+  break-after: page;
+  page-break-after: always;
+}
+
+@media screen {
+  body {
+    background: #f1f1f1;
   }
 
-  .appMain {
-    max-width: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
+  .printSheet {
+    background: #fff;
+    min-height: 100vh;
+  }
+
+  .ticketCopy {
+    box-shadow: 0 0 0 1px #ddd;
+    margin-bottom: 10px;
+    padding-left: 4mm;
+    padding-right: 4mm;
   }
 }
