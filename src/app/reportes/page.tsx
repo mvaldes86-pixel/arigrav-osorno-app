@@ -74,6 +74,42 @@ type DetalleTransporteRow = {
   faena: string;
 };
 
+type FacturacionDetalleRow = {
+  cliente: string;
+  fecha: string;
+  numeroGuia: number | string;
+  faena: string;
+  transporte: string;
+  chofer: string;
+  patente: string;
+  producto: string;
+  m3: number;
+  precioM3: number;
+  netoMaterial: number;
+  valorFlete: number;
+  totalLinea: number;
+  medioPago: string;
+  estadoFacturacion: string;
+};
+
+type FacturacionClienteResumen = {
+  cliente: string;
+  guias: number;
+  m3: number;
+  netoMateriales: number;
+  totalFletes: number;
+  totalGeneral: number;
+  estado: string;
+};
+
+type FacturacionProductoResumen = {
+  cliente: string;
+  producto: string;
+  m3: number;
+  precioPromedio: number;
+  neto: number;
+};
+
 /* ======================
    HELPERS
    ====================== */
@@ -588,15 +624,18 @@ function DashboardTab({
 /* ======================
    TAB 2: FACTURACIÓN
    ====================== */
-function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
+function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<string, string>) {
   const guiaMap = new Map<string, GuiaRow>();
   for (const g of guias) guiaMap.set(g.id, g);
 
-  type CliAgg = { facturado: number; pendiente: number; estado: string };
-  const byCliente = new Map<string, CliAgg>();
+  const detalleRows: FacturacionDetalleRow[] = [];
+  const resumenMap = new Map<string, FacturacionClienteResumen & { guiaIds: Set<string> }>();
+  const productosResumenMap = new Map<string, { cliente: string; producto: string; m3: number; neto: number }>();
 
   let totalFacturado = 0;
   let totalPendiente = 0;
+  let totalFletes = 0;
+  let totalGeneral = 0;
 
   const mpCount = new Map<string, number>();
   for (const g of guias) {
@@ -604,36 +643,107 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
     mpCount.set(k, (mpCount.get(k) ?? 0) + 1);
   }
 
-  const guiasCredito = guias.filter((g) => String(g.medio_pago ?? "").toUpperCase() === "CREDITO")
-    .length;
+  const guiasCredito = guias.filter((g) => String(g.medio_pago ?? "").toUpperCase() === "CREDITO").length;
+
+  const fletesSumados = new Set<string>();
 
   for (const it of items) {
     const g = guiaMap.get(it.guia_id);
     if (!g) continue;
 
     const cliente = getClientName(g);
-    const subtotal = safeNum(it.cantidad_m3) * safeNum(it.precio_m3);
+    const producto = productosMap.get(it.producto_id ?? "") ?? "(producto)";
+    const m3 = safeNum(it.cantidad_m3);
+    const precioM3 = safeNum(it.precio_m3);
+    const netoMaterial = m3 * precioM3;
+    const valorFlete = safeNum(g.valor_flete);
+    const totalLinea = netoMaterial + valorFlete;
+    const estado = String(g.estado_facturacion ?? "").toUpperCase() || "-";
 
-    if (!byCliente.has(cliente)) {
-      byCliente.set(cliente, { facturado: 0, pendiente: 0, estado: "Pendiente" });
+    detalleRows.push({
+      cliente,
+      fecha: g.fecha ?? "-",
+      numeroGuia: g.numero ?? "-",
+      faena: g.faena ?? "-",
+      transporte: getTransporteName(g),
+      chofer: g.chofer ?? "-",
+      patente: g.patente ?? "-",
+      producto,
+      m3,
+      precioM3,
+      netoMaterial,
+      valorFlete,
+      totalLinea,
+      medioPago: medioPagoLabel(g.medio_pago),
+      estadoFacturacion: estado,
+    });
+
+    if (!resumenMap.has(cliente)) {
+      resumenMap.set(cliente, {
+        cliente,
+        guias: 0,
+        m3: 0,
+        netoMateriales: 0,
+        totalFletes: 0,
+        totalGeneral: 0,
+        estado: "OK",
+        guiaIds: new Set<string>(),
+      });
     }
-    const agg = byCliente.get(cliente)!;
 
-    const est = String(g.estado_facturacion ?? "").toUpperCase();
-    if (est === "PAGADO") {
-      agg.facturado += subtotal;
-      totalFacturado += subtotal;
-    } else {
-      agg.pendiente += subtotal;
-      totalPendiente += subtotal;
+    const resumen = resumenMap.get(cliente)!;
+    resumen.m3 += m3;
+    resumen.netoMateriales += netoMaterial;
+
+    if (!fletesSumados.has(g.id)) {
+      resumen.totalFletes += valorFlete;
+      totalFletes += valorFlete;
+      fletesSumados.add(g.id);
     }
 
-    agg.estado = agg.pendiente > 0 ? "Pendiente" : "OK";
+    resumen.totalGeneral = resumen.netoMateriales + resumen.totalFletes;
+    resumen.guiaIds.add(g.id);
+    resumen.guias = resumen.guiaIds.size;
+    if (estado !== "PAGADO") resumen.estado = "Pendiente";
+
+    const keyProd = `${cliente}__${producto}`;
+    if (!productosResumenMap.has(keyProd)) {
+      productosResumenMap.set(keyProd, { cliente, producto, m3: 0, neto: 0 });
+    }
+    const prod = productosResumenMap.get(keyProd)!;
+    prod.m3 += m3;
+    prod.neto += netoMaterial;
+
+    if (estado === "PAGADO") totalFacturado += netoMaterial;
+    else totalPendiente += netoMaterial;
+
+    totalGeneral += netoMaterial;
   }
 
-  const tabla = Array.from(byCliente.entries())
-    .map(([cliente, v]) => ({ cliente, ...v }))
-    .sort((a, b) => b.pendiente - a.pendiente);
+  const resumenClientes: FacturacionClienteResumen[] = Array.from(resumenMap.values())
+    .map(({ guiaIds, ...rest }) => rest)
+    .sort((a, b) => b.totalGeneral - a.totalGeneral);
+
+  const resumenProductos: FacturacionProductoResumen[] = Array.from(productosResumenMap.values())
+    .map((p) => ({
+      cliente: p.cliente,
+      producto: p.producto,
+      m3: p.m3,
+      neto: p.neto,
+      precioPromedio: p.m3 > 0 ? p.neto / p.m3 : 0,
+    }))
+    .sort((a, b) => {
+      if (a.cliente === b.cliente) return b.neto - a.neto;
+      return a.cliente.localeCompare(b.cliente);
+    });
+
+  const detalleOrdenado = detalleRows.sort((a, b) => {
+    if (a.cliente === b.cliente) {
+      if (a.fecha === b.fecha) return String(a.numeroGuia).localeCompare(String(b.numeroGuia));
+      return a.fecha.localeCompare(b.fecha);
+    }
+    return a.cliente.localeCompare(b.cliente);
+  });
 
   const medios = Array.from(mpCount.entries())
     .map(([medio, guias]) => ({ medio, guias }))
@@ -644,8 +754,18 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[]) {
   return {
     totalFacturado,
     totalPendiente,
+    totalFletes,
+    totalGeneral: totalGeneral + totalFletes,
     guiasCredito,
-    tabla,
+    tabla: resumenClientes.map((r) => ({
+      cliente: r.cliente,
+      facturado: r.netoMateriales,
+      pendiente: r.estado === "Pendiente" ? r.totalGeneral : 0,
+      estado: r.estado,
+    })),
+    resumenClientes,
+    resumenProductos,
+    detalleRows: detalleOrdenado,
     bancoChile: getCount("Banco de Chile"),
     bancoEstado: getCount("Banco Estado"),
     efectivo: getCount("Efectivo"),
@@ -664,64 +784,199 @@ function FacturacionTab({
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <div className="section">
-        <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Reporte de Facturación</h2>
-        <div className="muted" style={{ marginTop: 6 }}>
-          Resumen por cliente: facturado vs pendiente (sin planillas extra)
-        </div>
-        <div className="muted" style={{ marginTop: 6 }}>
-          Mostrando desde <strong>{desde}</strong> hasta <strong>{hasta}</strong>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Facturación automática por cliente</h2>
+            <div className="muted" style={{ marginTop: 6 }}>
+              Resumen y detalle facturable por cliente, incluyendo materiales y fletes.
+            </div>
+            <div className="muted" style={{ marginTop: 6 }}>
+              Mostrando desde <strong>{desde}</strong> hasta <strong>{hasta}</strong>
+            </div>
+          </div>
+
+          <a
+            className="btn btnPrimary"
+            href={`/reportes/facturacion-export?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(
+              hasta
+            )}`}
+          >
+            Descargar Excel Facturación
+          </a>
         </div>
 
         <div className="kpiGrid" style={{ marginTop: 16 }}>
-          <KPI label="Total facturado (rango)" value={formatCLP(data.totalFacturado)} />
-          <KPI label="Total pendiente" value={formatCLP(data.totalPendiente)} />
+          <KPI label="Total materiales" value={formatCLP(data.totalFacturado + data.totalPendiente)} />
+          <KPI label="Total fletes" value={formatCLP(data.totalFletes)} />
+          <KPI label="Total general" value={formatCLP(data.totalGeneral)} />
           <KPI label="Guías en crédito / por cobrar" value={String(data.guiasCredito)} />
           <KPI label="Guías Banco Chile" value={data.bancoChile} />
           <KPI label="Guías Banco Estado" value={data.bancoEstado} />
           <KPI label="Guías Efectivo" value={data.efectivo} />
+          <KPI label="Clientes del rango" value={String(data.resumenClientes.length)} />
         </div>
 
         <div className="spacer" />
 
-        <div className="card" style={{ border: "1px solid var(--line)" }}>
-          <div className="toolbar" style={{ borderBottom: "1px solid var(--line)" }}>
-            <div style={{ fontWeight: 900 }}>Resumen por cliente</div>
-            <div className="muted">Calculado como suma de (m³ * precio por m³) en los items de cada guía.</div>
-          </div>
+        <div className="cardInner">
+          <div className="cardTitle">Resumen por cliente</div>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Cliente</th>
+                <th style={{ textAlign: "right" }}>Guías</th>
+                <th style={{ textAlign: "right" }}>m³</th>
+                <th style={{ textAlign: "right" }}>Neto materiales</th>
+                <th style={{ textAlign: "right" }}>Fletes</th>
+                <th style={{ textAlign: "right" }}>Total general</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.resumenClientes.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="muted" style={{ padding: 14 }}>
+                    No hay datos en este rango.
+                  </td>
+                </tr>
+              ) : (
+                data.resumenClientes.map((r) => (
+                  <tr key={r.cliente}>
+                    <td style={{ fontWeight: 900 }}>{r.cliente}</td>
+                    <td style={{ textAlign: "right" }}>{r.guias}</td>
+                    <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.netoMateriales)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalFletes)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.totalGeneral)}</td>
+                    <td style={{ fontWeight: 900 }}>{r.estado}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
 
-          <div className="section" style={{ paddingTop: 10 }}>
-            <table className="table">
+        <div className="spacer" />
+
+        <div className="cardInner">
+          <div className="cardTitle">Resumen por cliente y producto</div>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Cliente</th>
+                <th>Producto</th>
+                <th style={{ textAlign: "right" }}>m³</th>
+                <th style={{ textAlign: "right" }}>Precio prom.</th>
+                <th style={{ textAlign: "right" }}>Neto</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.resumenProductos.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="muted" style={{ padding: 14 }}>
+                    No hay datos en este rango.
+                  </td>
+                </tr>
+              ) : (
+                data.resumenProductos.map((r, i) => (
+                  <tr key={`${r.cliente}-${r.producto}-${i}`}>
+                    <td style={{ fontWeight: 900 }}>{r.cliente}</td>
+                    <td>{r.producto}</td>
+                    <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
+                    <td style={{ textAlign: "right" }}>{formatCLP(r.precioPromedio)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.neto)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="spacer" />
+
+        <div className="cardInner">
+          <div className="cardTitle">Detalle facturable completo</div>
+
+          <div
+            style={{
+              width: "100%",
+              overflowX: "auto",
+              WebkitOverflowScrolling: "touch",
+            }}
+          >
+            <table
+              className="table"
+              style={{
+                minWidth: 1600,
+                whiteSpace: "nowrap",
+              }}
+            >
               <thead>
                 <tr>
                   <th>Cliente</th>
-                  <th style={{ textAlign: "right" }}>Facturado</th>
-                  <th style={{ textAlign: "right" }}>Pendiente</th>
+                  <th>Fecha</th>
+                  <th>N° guía</th>
+                  <th>Faena</th>
+                  <th>Transporte</th>
+                  <th>Chofer</th>
+                  <th>Patente</th>
+                  <th>Producto</th>
+                  <th style={{ textAlign: "right" }}>m³</th>
+                  <th style={{ textAlign: "right" }}>Precio/m³</th>
+                  <th style={{ textAlign: "right" }}>Neto material</th>
+                  <th style={{ textAlign: "right" }}>Valor flete</th>
+                  <th style={{ textAlign: "right" }}>Total línea</th>
+                  <th>Método pago</th>
                   <th>Estado</th>
                 </tr>
               </thead>
               <tbody>
-                {data.tabla.length === 0 ? (
+                {data.detalleRows.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="muted" style={{ padding: 14 }}>
+                    <td colSpan={15} className="muted" style={{ padding: 14 }}>
                       No hay datos en este rango.
                     </td>
                   </tr>
                 ) : (
-                  data.tabla.map((r) => (
-                    <tr key={r.cliente}>
+                  data.detalleRows.map((r, i) => (
+                    <tr key={`${r.cliente}-${r.numeroGuia}-${r.producto}-${i}`}>
                       <td style={{ fontWeight: 900 }}>{r.cliente}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.facturado)}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.pendiente)}</td>
-                      <td style={{ fontWeight: 900 }}>{r.estado}</td>
+                      <td>{r.fecha}</td>
+                      <td>{r.numeroGuia}</td>
+                      <td>{r.faena}</td>
+                      <td>{r.transporte}</td>
+                      <td>{r.chofer}</td>
+                      <td>{r.patente}</td>
+                      <td
+                        style={{
+                          whiteSpace: "normal",
+                          minWidth: 160,
+                        }}
+                      >
+                        {r.producto}
+                      </td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>
+                        {formatNumber(r.m3, 2)}
+                      </td>
+                      <td style={{ textAlign: "right" }}>{formatCLP(r.precioM3)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.netoMaterial)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.valorFlete)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.totalLinea)}</td>
+                      <td>{r.medioPago}</td>
+                      <td>{r.estadoFacturacion}</td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
-
-            <div className="spacer" />
-
-            <div className="muted">Siguiente paso (cuando quieras): exportar CSV y botón “Marcar como facturado”.</div>
           </div>
         </div>
 
@@ -1839,7 +2094,7 @@ export default async function ReportesPage({
   }
 
   const dashboard = buildDashboard(guias, items, productosMap);
-  const facturacion = buildFacturacion(guias, items);
+  const facturacion = buildFacturacion(guias, items, productosMap);
   const produccion = buildProduccionPorDia(guias, items);
   const camiones = buildCamionesChoferes(guias, items);
   const detalleTransportes = buildDetalleTransportes(guias, items, productosMap);
