@@ -15,10 +15,10 @@ type ItemDraft = {
 };
 
 const MEDIOS_PAGO = [
+  { value: "CREDITO", label: "Crédito" },
   { value: "BANCO_CHILE", label: "Banco de Chile" },
   { value: "BANCO_ESTADO", label: "Banco Estado" },
   { value: "EFECTIVO", label: "Efectivo" },
-  { value: "CREDITO", label: "Crédito" },
 ] as const;
 
 const TIPOS_OPERACION = [
@@ -34,17 +34,26 @@ const ESTADOS_FACT = [
 ] as const;
 
 const SECTORES = [
-  { value: "PLANTA", label: "Planta" },
-  { value: "ESCOMBRERA", label: "Escombrera" },
   { value: "POZO", label: "Pozo" },
+  { value: "ESCOMBRERA", label: "Escombrera" },
 ] as const;
 
+const CLIENTES_OCULTOS = new Set([
+  "A. FRANKE",
+  "A.FRANKE",
+  "A. PILAUCO",
+  "A.PILAUCO",
+  "A. RIO NEGRO",
+  "A.RIO NEGRO",
+]);
+
 function todayChileYYYYMMDD() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Santiago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
 function toNumberSafe(v: string) {
@@ -55,6 +64,10 @@ function toNumberSafe(v: string) {
 
 function normalizeText(v: string) {
   return v.trim().replace(/\s+/g, " ");
+}
+
+function normalizeCompare(v: string) {
+  return normalizeText(v).toUpperCase();
 }
 
 function supabaseErrorText(err: any) {
@@ -228,7 +241,7 @@ export default function NuevaGuiaPage() {
   const [productos, setProductos] = useState<Producto[]>([]);
   const [transportes, setTransportes] = useState<Transporte[]>([]);
 
-  const [fecha, setFecha] = useState(todayChileYYYYMMDD());
+  const [fecha, setFecha] = useState("");
   const [clienteId, setClienteId] = useState<string>("");
   const [clienteManual, setClienteManual] = useState<string>("");
 
@@ -242,17 +255,21 @@ export default function NuevaGuiaPage() {
   const [patente, setPatente] = useState("");
 
   const [medioPago, setMedioPago] =
-    useState<(typeof MEDIOS_PAGO)[number]["value"]>("EFECTIVO");
+    useState<(typeof MEDIOS_PAGO)[number]["value"]>("CREDITO");
   const [tipoOperacion, setTipoOperacion] =
     useState<(typeof TIPOS_OPERACION)[number]["value"]>("VENTA_ARIDOS");
   const [estadoFacturacion, setEstadoFacturacion] =
     useState<(typeof ESTADOS_FACT)[number]["value"]>("PENDIENTE");
   const [sector, setSector] =
-    useState<(typeof SECTORES)[number]["value"]>("PLANTA");
+    useState<(typeof SECTORES)[number]["value"]>("POZO");
 
   const [items, setItems] = useState<ItemDraft[]>([
     { producto_id: "", cantidad_m3: "", precio_m3: "" },
   ]);
+
+  useEffect(() => {
+    setFecha(todayChileYYYYMMDD());
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -264,7 +281,10 @@ export default function NuevaGuiaPage() {
       if (c.error) {
         console.error("Supabase error clientes:", c.error);
       } else {
-        setClientes((c.data ?? []) as Cliente[]);
+        const filtrados = ((c.data ?? []) as Cliente[]).filter(
+          (cli) => !CLIENTES_OCULTOS.has(normalizeCompare(cli.nombre))
+        );
+        setClientes(filtrados);
       }
 
       const p = await supabase
@@ -362,7 +382,9 @@ export default function NuevaGuiaPage() {
     const nuevoCliente = insC.data as Cliente;
 
     setClientes((prev) => {
-      const next = [...prev, nuevoCliente];
+      const next = [...prev, nuevoCliente].filter(
+        (cli) => !CLIENTES_OCULTOS.has(normalizeCompare(cli.nombre))
+      );
       next.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
       return next;
     });
