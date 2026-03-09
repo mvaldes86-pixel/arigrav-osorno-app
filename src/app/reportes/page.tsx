@@ -1,17 +1,6 @@
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
-/**
- * Reportes (7 tabs):
- * 1) Dashboard Operativo
- * 2) Facturación
- * 3) Producción por día
- * 4) Camiones / Choferes
- * 5) Productos
- * 6) Clientes
- * 7) Cobranza (Aging)
- */
-
 type TabKey =
   | "dashboard"
   | "facturacion"
@@ -21,13 +10,15 @@ type TabKey =
   | "clientes"
   | "cobranza";
 
+type NombreRel = { nombre: string } | { nombre: string }[] | null;
+
 type GuiaRow = {
   id: string;
   numero: number | null;
   fecha: string | null;
   faena: string | null;
   cliente_id: string | null;
-  clientes?: { nombre: string } | null;
+  clientes?: NombreRel;
 
   medio_pago:
     | "BANCO_CHILE"
@@ -37,14 +28,20 @@ type GuiaRow = {
     | string
     | null;
 
-  estado_facturacion: "PENDIENTE" | "PAGADO" | "FACTURADO" | "ANULADA" | string | null;
+  estado_facturacion:
+    | "PENDIENTE"
+    | "PAGADO"
+    | "FACTURADO"
+    | "ANULADA"
+    | string
+    | null;
 
   chofer: string | null;
   patente: string | null;
 
   transporte_id: string | null;
   valor_flete: number | null;
-  transportes?: { nombre: string } | null;
+  transportes?: NombreRel;
 };
 
 type ItemRow = {
@@ -128,6 +125,37 @@ type ArigravChoferResumenRow = {
   totalMaterial: number;
 };
 
+type FleteDetalleRow = {
+  numeroGuia: number | string;
+  fecha: string;
+  cliente: string;
+  faena: string;
+  transporte: string;
+  chofer: string;
+  patente: string;
+  medioPago: string;
+  m3: number;
+  valorFlete: number;
+  totalMaterial: number;
+  totalGuia: number;
+};
+
+type FleteResumenTransporteRow = {
+  transporte: string;
+  viajes: number;
+  m3: number;
+  totalFletes: number;
+  promFleteViaje: number;
+};
+
+type FleteResumenChoferRow = {
+  chofer: string;
+  viajes: number;
+  m3: number;
+  totalFletes: number;
+  promFleteViaje: number;
+};
+
 /* ======================
    HELPERS
    ====================== */
@@ -182,12 +210,18 @@ function normPatente(v: string | null) {
   return v.trim().replace(/\s+/g, "").toUpperCase();
 }
 
+function getNombre(rel?: NombreRel): string {
+  if (!rel) return "";
+  if (Array.isArray(rel)) return rel[0]?.nombre ?? "";
+  return rel.nombre ?? "";
+}
+
 function getClientName(g: GuiaRow) {
-  return g.clientes?.nombre ?? "(sin cliente)";
+  return getNombre(g.clientes) || "(sin cliente)";
 }
 
 function getTransporteName(g: GuiaRow) {
-  return g.transportes?.nombre ?? "ARIGRAV";
+  return getNombre(g.transportes) || "ARIGRAV";
 }
 
 function isGuiaActiva(g: GuiaRow) {
@@ -1080,9 +1114,7 @@ function FacturacionTab({
                       >
                         {r.producto}
                       </td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>
-                        {formatNumber(r.m3, 2)}
-                      </td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
                       <td style={{ textAlign: "right" }}>{formatCLP(r.precioM3)}</td>
                       <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.netoMaterial)}</td>
                       <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.valorFlete)}</td>
@@ -1396,54 +1428,10 @@ function buildCamionesChoferes(guias: GuiaRow[], items: ItemRow[]) {
   return { totalM3, totalGuias, promM3Viaje, rankingCamiones, rankingChoferes };
 }
 
-function buildDetalleTransportes(
-  guias: GuiaRow[],
-  items: ItemRow[],
-  productosMap: Map<string, string>
-): DetalleTransporteRow[] {
-  const guiaMap = new Map<string, GuiaRow>();
-  for (const g of guias) guiaMap.set(g.id, g);
-
-  const rows: DetalleTransporteRow[] = [];
-
-  for (const it of items) {
-    const g = guiaMap.get(it.guia_id);
-    if (!g) continue;
-
-    rows.push({
-      transporte: getTransporteName(g),
-      cliente: getClientName(g),
-      producto: productosMap.get(it.producto_id ?? "") ?? "-",
-      m3: safeNum(it.cantidad_m3),
-      fecha: g.fecha ?? "-",
-      valorFlete: safeNum(g.valor_flete),
-      numeroGuia: g.numero ?? "-",
-      chofer: g.chofer ?? "-",
-      patente: g.patente ?? "-",
-      medioPago: medioPagoLabel(g.medio_pago),
-      faena: g.faena ?? "-",
-    });
-  }
-
-  return rows.sort((a, b) => {
-    if (a.fecha === b.fecha) return String(a.numeroGuia).localeCompare(String(b.numeroGuia));
-    return a.fecha.localeCompare(b.fecha);
-  });
-}
-
-function buildArigravResumen(guias: GuiaRow[], items: ItemRow[]): {
-  detalle: ArigravDetalleRow[];
-  resumenChofer: ArigravChoferResumenRow[];
-  totalViajes: number;
-  totalM3: number;
-  totalMaterial: number;
-} {
+function buildArigravResumen(guias: GuiaRow[], items: ItemRow[]) {
   const guiasArigrav = guias.filter(
     (g) => getTransporteName(g).trim().toUpperCase() === "ARIGRAV"
   );
-
-  const guiaMap = new Map<string, GuiaRow>();
-  for (const g of guiasArigrav) guiaMap.set(g.id, g);
 
   const detalleMap = new Map<string, ArigravDetalleRow>();
 
@@ -1508,16 +1496,121 @@ function buildArigravResumen(guias: GuiaRow[], items: ItemRow[]): {
   };
 }
 
+function buildFletesResumen(guias: GuiaRow[], items: ItemRow[]) {
+  const detalleMap = new Map<string, FleteDetalleRow>();
+
+  for (const g of guias) {
+    const valorFlete = safeNum(g.valor_flete);
+
+    if (valorFlete <= 0) continue;
+
+    detalleMap.set(g.id, {
+      numeroGuia: g.numero ?? "-",
+      fecha: g.fecha ?? "-",
+      cliente: getClientName(g),
+      faena: g.faena ?? "-",
+      transporte: getTransporteName(g),
+      chofer: g.chofer ?? "-",
+      patente: g.patente ?? "-",
+      medioPago: medioPagoLabel(g.medio_pago),
+      m3: 0,
+      valorFlete,
+      totalMaterial: 0,
+      totalGuia: 0,
+    });
+  }
+
+  for (const it of items) {
+    const row = detalleMap.get(it.guia_id);
+    if (!row) continue;
+
+    const m3 = safeNum(it.cantidad_m3);
+    const precio = safeNum(it.precio_m3);
+
+    row.m3 += m3;
+    row.totalMaterial += m3 * precio;
+    row.totalGuia = row.totalMaterial + row.valorFlete;
+  }
+
+  const detalle = Array.from(detalleMap.values()).sort((a, b) => {
+    if (a.fecha === b.fecha) {
+      return String(a.numeroGuia).localeCompare(String(b.numeroGuia), "es", {
+        numeric: true,
+      });
+    }
+    return a.fecha.localeCompare(b.fecha);
+  });
+
+  const transporteMap = new Map<string, FleteResumenTransporteRow>();
+  const choferMap = new Map<string, FleteResumenChoferRow>();
+
+  for (const r of detalle) {
+    if (safeNum(r.valorFlete) <= 0) continue;
+
+    const keyT = (r.transporte || "SIN TRANSPORTE").trim().toUpperCase();
+    if (!transporteMap.has(keyT)) {
+      transporteMap.set(keyT, {
+        transporte: r.transporte || "SIN TRANSPORTE",
+        viajes: 0,
+        m3: 0,
+        totalFletes: 0,
+        promFleteViaje: 0,
+      });
+    }
+    const aggT = transporteMap.get(keyT)!;
+    aggT.viajes += 1;
+    aggT.m3 += safeNum(r.m3);
+    aggT.totalFletes += safeNum(r.valorFlete);
+    aggT.promFleteViaje = aggT.viajes > 0 ? aggT.totalFletes / aggT.viajes : 0;
+
+    const keyC = (r.chofer || "SIN CHOFER").trim().toUpperCase();
+    if (!choferMap.has(keyC)) {
+      choferMap.set(keyC, {
+        chofer: r.chofer || "SIN CHOFER",
+        viajes: 0,
+        m3: 0,
+        totalFletes: 0,
+        promFleteViaje: 0,
+      });
+    }
+    const aggC = choferMap.get(keyC)!;
+    aggC.viajes += 1;
+    aggC.m3 += safeNum(r.m3);
+    aggC.totalFletes += safeNum(r.valorFlete);
+    aggC.promFleteViaje = aggC.viajes > 0 ? aggC.totalFletes / aggC.viajes : 0;
+  }
+
+  const resumenTransporte = Array.from(transporteMap.values()).sort(
+    (a, b) => b.totalFletes - a.totalFletes
+  );
+
+  const resumenChofer = Array.from(choferMap.values()).sort(
+    (a, b) => b.totalFletes - a.totalFletes
+  );
+
+  return {
+    detalle,
+    resumenTransporte,
+    resumenChofer,
+    totalViajes: detalle.length,
+    totalM3: detalle.reduce((s, r) => s + safeNum(r.m3), 0),
+    totalFletes: detalle.reduce((s, r) => s + safeNum(r.valorFlete), 0),
+    totalMaterial: detalle.reduce((s, r) => s + safeNum(r.totalMaterial), 0),
+  };
+}
+
 function CamionesTab({
   data,
   desde,
   hasta,
   arigrav,
+  fletes,
 }: {
   data: ReturnType<typeof buildCamionesChoferes>;
   desde: string;
   hasta: string;
   arigrav: ReturnType<typeof buildArigravResumen>;
+  fletes: ReturnType<typeof buildFletesResumen>;
 }) {
   return (
     <div className="card" style={{ marginTop: 14 }}>
@@ -1714,6 +1807,164 @@ function CamionesTab({
               )}
             </tbody>
           </table>
+        </div>
+
+        <div className="spacer" />
+
+        <div className="cardInner">
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              alignItems: "center",
+              flexWrap: "wrap",
+              marginBottom: 12,
+            }}
+          >
+            <div>
+              <div className="cardTitle" style={{ marginBottom: 4 }}>
+                Resumen de Fletes
+              </div>
+              <div className="muted">
+                Detalle de fletes por guía y resumen agrupado por transporte y chofer.
+              </div>
+            </div>
+
+            <a
+              className="btn btnPrimary"
+              href={`/reportes/fletes-export?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(
+                hasta
+              )}`}
+            >
+              Descargar Resumen Fletes
+            </a>
+          </div>
+
+          <div className="kpiGrid" style={{ marginBottom: 16 }}>
+            <KPI label="Viajes con flete" value={String(fletes.totalViajes)} />
+            <KPI label="m³ total" value={formatNumber(fletes.totalM3, 2)} />
+            <KPI label="Total fletes" value={formatCLP(fletes.totalFletes)} />
+            <KPI label="Total material" value={formatCLP(fletes.totalMaterial)} />
+          </div>
+
+          <div className="cardTitle">Detalle de Fletes</div>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>N° guía</th>
+                <th>Fecha</th>
+                <th>Cliente / Empresa</th>
+                <th>Faena</th>
+                <th>Transporte</th>
+                <th>Chofer</th>
+                <th>Patente</th>
+                <th>Método pago</th>
+                <th style={{ textAlign: "right" }}>m³</th>
+                <th style={{ textAlign: "right" }}>Valor flete</th>
+                <th style={{ textAlign: "right" }}>Total material</th>
+                <th style={{ textAlign: "right" }}>Total guía</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fletes.detalle.length === 0 ? (
+                <tr>
+                  <td colSpan={12} className="muted" style={{ padding: 14 }}>
+                    Sin datos de fletes en este rango.
+                  </td>
+                </tr>
+              ) : (
+                fletes.detalle.map((r, i) => (
+                  <tr key={`${r.numeroGuia}-${r.fecha}-${i}`}>
+                    <td style={{ fontWeight: 900 }}>{r.numeroGuia}</td>
+                    <td>{r.fecha}</td>
+                    <td>{r.cliente}</td>
+                    <td>{r.faena}</td>
+                    <td>{r.transporte}</td>
+                    <td>{r.chofer}</td>
+                    <td>{r.patente}</td>
+                    <td>{r.medioPago}</td>
+                    <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.valorFlete)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalMaterial)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.totalGuia)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+
+          <div className="spacer" />
+
+          <div className="grid2">
+            <div className="cardInner">
+              <div className="cardTitle">Resumen por transporte</div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Transporte</th>
+                    <th style={{ textAlign: "right" }}>Viajes</th>
+                    <th style={{ textAlign: "right" }}>m³</th>
+                    <th style={{ textAlign: "right" }}>Total fletes</th>
+                    <th style={{ textAlign: "right" }}>Prom. flete / viaje</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fletes.resumenTransporte.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="muted" style={{ padding: 14 }}>
+                        Sin resumen por transporte.
+                      </td>
+                    </tr>
+                  ) : (
+                    fletes.resumenTransporte.map((r) => (
+                      <tr key={r.transporte}>
+                        <td style={{ fontWeight: 900 }}>{r.transporte}</td>
+                        <td style={{ textAlign: "right" }}>{r.viajes}</td>
+                        <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
+                        <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalFletes)}</td>
+                        <td style={{ textAlign: "right" }}>{formatCLP(r.promFleteViaje)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="cardInner">
+              <div className="cardTitle">Resumen por chofer</div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Chofer</th>
+                    <th style={{ textAlign: "right" }}>Viajes</th>
+                    <th style={{ textAlign: "right" }}>m³</th>
+                    <th style={{ textAlign: "right" }}>Total fletes</th>
+                    <th style={{ textAlign: "right" }}>Prom. flete / viaje</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fletes.resumenChofer.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="muted" style={{ padding: 14 }}>
+                        Sin resumen por chofer.
+                      </td>
+                    </tr>
+                  ) : (
+                    fletes.resumenChofer.map((r) => (
+                      <tr key={r.chofer}>
+                        <td style={{ fontWeight: 900 }}>{r.chofer}</td>
+                        <td style={{ textAlign: "right" }}>{r.viajes}</td>
+                        <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
+                        <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalFletes)}</td>
+                        <td style={{ textAlign: "right" }}>{formatCLP(r.promFleteViaje)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -2260,6 +2511,44 @@ function CobranzaTab({
 }
 
 /* ======================
+   DETALLE SEMANA
+   ====================== */
+function buildDetalleTransportes(
+  guias: GuiaRow[],
+  items: ItemRow[],
+  productosMap: Map<string, string>
+): DetalleTransporteRow[] {
+  const guiaMap = new Map<string, GuiaRow>();
+  for (const g of guias) guiaMap.set(g.id, g);
+
+  const rows: DetalleTransporteRow[] = [];
+
+  for (const it of items) {
+    const g = guiaMap.get(it.guia_id);
+    if (!g) continue;
+
+    rows.push({
+      transporte: getTransporteName(g),
+      cliente: getClientName(g),
+      producto: productosMap.get(it.producto_id ?? "") ?? "-",
+      m3: safeNum(it.cantidad_m3),
+      fecha: g.fecha ?? "-",
+      valorFlete: safeNum(g.valor_flete),
+      numeroGuia: g.numero ?? "-",
+      chofer: g.chofer ?? "-",
+      patente: g.patente ?? "-",
+      medioPago: medioPagoLabel(g.medio_pago),
+      faena: g.faena ?? "-",
+    });
+  }
+
+  return rows.sort((a, b) => {
+    if (a.fecha === b.fecha) return String(a.numeroGuia).localeCompare(String(b.numeroGuia));
+    return a.fecha.localeCompare(b.fecha);
+  });
+}
+
+/* ======================
    MAIN
    ====================== */
 export default async function ReportesPage({
@@ -2310,6 +2599,7 @@ export default async function ReportesPage({
   const camiones = buildCamionesChoferes(guias, items);
   const detalleTransportes = buildDetalleTransportes(guias, items, productosMap);
   const arigrav = buildArigravResumen(guias, items);
+  const fletes = buildFletesResumen(guias, items);
   const productos = buildProductos(guias, items, productosMap);
   const clientes = buildClientes(guias, items, productosMap);
   const cobranza = buildCobranzaAging(guias, items);
@@ -2332,7 +2622,13 @@ export default async function ReportesPage({
       {tab === "facturacion" && <FacturacionTab desde={desde} hasta={hasta} data={facturacion} />}
       {tab === "produccion" && <ProduccionTab desde={desde} hasta={hasta} data={produccion} />}
       {tab === "camiones" && (
-        <CamionesTab data={camiones} desde={desde} hasta={hasta} arigrav={arigrav} />
+        <CamionesTab
+          data={camiones}
+          desde={desde}
+          hasta={hasta}
+          arigrav={arigrav}
+          fletes={fletes}
+        />
       )}
       {tab === "productos" && <ProductosTab desde={desde} hasta={hasta} data={productos} />}
       {tab === "clientes" && <ClientesTab desde={desde} hasta={hasta} data={clientes} />}
