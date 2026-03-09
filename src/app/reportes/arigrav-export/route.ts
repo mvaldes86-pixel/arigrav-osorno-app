@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 
+type NombreRel = { nombre: string } | { nombre: string }[] | null;
+
 type GuiaRow = {
   id: string;
   numero: number | null;
@@ -9,15 +11,21 @@ type GuiaRow = {
   faena: string | null;
   chofer: string | null;
   patente: string | null;
-  clientes?: { nombre: string } | null;
-  transportes?: { nombre: string } | null;
+  clientes?: NombreRel;
+  transportes?: NombreRel;
 };
 
 type ItemRow = {
   id: string;
   guia_id: string;
+  producto_id: string | null;
   cantidad_m3: number | null;
   precio_m3: number | null;
+};
+
+type ProductoRow = {
+  id: string;
+  nombre: string;
 };
 
 function safeNum(v: unknown) {
@@ -25,12 +33,18 @@ function safeNum(v: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function getNombre(rel?: NombreRel): string {
+  if (!rel) return "";
+  if (Array.isArray(rel)) return rel[0]?.nombre ?? "";
+  return rel.nombre ?? "";
+}
+
 function getClientName(g: GuiaRow) {
-  return g.clientes?.nombre ?? "";
+  return getNombre(g.clientes);
 }
 
 function getTransporteName(g: GuiaRow) {
-  return (g.transportes?.nombre ?? "").trim().toUpperCase();
+  return getNombre(g.transportes).trim().toUpperCase();
 }
 
 export async function GET(req: Request) {
@@ -45,7 +59,9 @@ export async function GET(req: Request) {
 
   const { data: guiasData, error: guiasError } = await supabase
     .from("guias")
-    .select("id, numero, fecha, faena, chofer, patente, clientes(nombre), transportes(nombre)")
+    .select(
+      "id, numero, fecha, faena, chofer, patente, clientes(nombre), transportes(nombre)"
+    )
     .gte("fecha", desde)
     .lte("fecha", hasta)
     .order("fecha", { ascending: true });
@@ -54,7 +70,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: guiasError.message }, { status: 500 });
   }
 
-  const guias = ((guiasData ?? []) as GuiaRow[]).filter(
+  const guias = ((guiasData ?? []) as unknown as GuiaRow[]).filter(
     (g) => getTransporteName(g) === "ARIGRAV"
   );
 
@@ -64,7 +80,7 @@ export async function GET(req: Request) {
   if (guiaIds.length > 0) {
     const { data: itemsData, error: itemsError } = await supabase
       .from("guia_items")
-      .select("id, guia_id, cantidad_m3, precio_m3")
+      .select("id, guia_id, producto_id, cantidad_m3, precio_m3")
       .in("guia_id", guiaIds);
 
     if (itemsError) {
@@ -74,33 +90,50 @@ export async function GET(req: Request) {
     items = (itemsData ?? []) as ItemRow[];
   }
 
-  const guiaMap = new Map<string, GuiaRow>();
-  for (const g of guias) guiaMap.set(g.id, g);
+  const productoIds = Array.from(
+    new Set(items.map((it) => it.producto_id).filter(Boolean))
+  ) as string[];
+
+  const productosMap = new Map<string, string>();
+  if (productoIds.length > 0) {
+    const { data: productosData, error: productosError } = await supabase
+      .from("productos")
+      .select("id, nombre")
+      .in("id", productoIds);
+
+    if (productosError) {
+      return NextResponse.json({ error: productosError.message }, { status: 500 });
+    }
+
+    for (const p of (productosData ?? []) as ProductoRow[]) {
+      productosMap.set(p.id, p.nombre);
+    }
+  }
 
   const detalleMap = new Map<
     string,
     {
-      numero_guia: number | string;
+      numeroGuia: number | string;
       faena: string;
-      cliente_empresa: string;
+      clienteEmpresa: string;
       chofer: string;
       patente: string;
       m3: number;
-      total_material: number;
-      total_vueltas_viajes: number;
+      totalMaterial: number;
+      totalVueltasViajes: number;
     }
   >();
 
   for (const g of guias) {
     detalleMap.set(g.id, {
-      numero_guia: g.numero ?? "",
+      numeroGuia: g.numero ?? "",
       faena: g.faena ?? "",
-      cliente_empresa: getClientName(g),
+      clienteEmpresa: getClientName(g),
       chofer: g.chofer ?? "",
       patente: g.patente ?? "",
       m3: 0,
-      total_material: 0,
-      total_vueltas_viajes: 1,
+      totalMaterial: 0,
+      totalVueltasViajes: 1,
     });
   }
 
@@ -112,12 +145,12 @@ export async function GET(req: Request) {
     const precio = safeNum(it.precio_m3);
 
     row.m3 += m3;
-    row.total_material += m3 * precio;
+    row.totalMaterial += m3 * precio;
   }
 
-  const detalleRows = Array.from(detalleMap.values()).sort((a, b) => {
-    return String(a.numero_guia).localeCompare(String(b.numero_guia), "es", { numeric: true });
-  });
+  const detalleRows = Array.from(detalleMap.values()).sort((a, b) =>
+    String(a.numeroGuia).localeCompare(String(b.numeroGuia), "es", { numeric: true })
+  );
 
   const resumenChoferMap = new Map<
     string,
@@ -125,7 +158,7 @@ export async function GET(req: Request) {
       chofer: string;
       viajes: number;
       m3: number;
-      total_material: number;
+      totalMaterial: number;
     }
   >();
 
@@ -137,14 +170,14 @@ export async function GET(req: Request) {
         chofer: r.chofer || "(sin chofer)",
         viajes: 0,
         m3: 0,
-        total_material: 0,
+        totalMaterial: 0,
       });
     }
 
     const agg = resumenChoferMap.get(key)!;
     agg.viajes += 1;
     agg.m3 += safeNum(r.m3);
-    agg.total_material += safeNum(r.total_material);
+    agg.totalMaterial += safeNum(r.totalMaterial);
   }
 
   const resumenChoferRows = Array.from(resumenChoferMap.values()).sort((a, b) => {
@@ -156,14 +189,14 @@ export async function GET(req: Request) {
 
   const wsDetalle = XLSX.utils.json_to_sheet(
     detalleRows.map((r) => ({
-      NUMERO_GUIA: r.numero_guia,
+      NUMERO_GUIA: r.numeroGuia,
       FAENA: r.faena,
-      CLIENTE_EMPRESA: r.cliente_empresa,
+      CLIENTE_EMPRESA: r.clienteEmpresa,
       CHOFER: r.chofer,
       PATENTE: r.patente,
       M3: r.m3,
-      TOTAL_MATERIAL: r.total_material,
-      TOTAL_VUELTAS_VIAJES: r.total_vueltas_viajes,
+      TOTAL_MATERIAL: r.totalMaterial,
+      TOTAL_VUELTAS_VIAJES: r.totalVueltasViajes,
     }))
   );
 
@@ -174,8 +207,8 @@ export async function GET(req: Request) {
     { wch: 22 },
     { wch: 14 },
     { wch: 10 },
-    { wch: 16 },
-    { wch: 20 },
+    { wch: 18 },
+    { wch: 22 },
   ];
 
   XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle Arigrav");
@@ -183,15 +216,15 @@ export async function GET(req: Request) {
   const wsResumen = XLSX.utils.json_to_sheet(
     resumenChoferRows.map((r) => ({
       CHOFER: r.chofer,
-      VIAJES: r.viajes,
-      M3: r.m3,
-      TOTAL_MATERIAL: r.total_material,
+      TOTAL_VIAJES: r.viajes,
+      TOTAL_M3: r.m3,
+      TOTAL_MATERIAL: r.totalMaterial,
     }))
   );
 
   wsResumen["!cols"] = [
     { wch: 24 },
-    { wch: 12 },
+    { wch: 14 },
     { wch: 12 },
     { wch: 18 },
   ];
