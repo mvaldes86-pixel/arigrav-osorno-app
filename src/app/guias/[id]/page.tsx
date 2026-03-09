@@ -1,5 +1,6 @@
 ﻿import Link from "next/link";
 import { notFound } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { supabase } from "@/lib/supabase";
 
 type Guia = {
@@ -47,6 +48,14 @@ function logSupabaseError(tag: string, err: any) {
   const details = err?.details ?? "";
   const hint = err?.hint ?? "";
   console.error(`${tag} message="${msg}" code="${code}" details="${details}" hint="${hint}"`, err);
+}
+
+async function cambiarEstado(id: string, estado: string) {
+  "use server";
+  await supabase.from("guias").update({ estado_facturacion: estado }).eq("id", id);
+  revalidatePath(`/guias/${id}`);
+  revalidatePath("/guias");
+  revalidatePath("/reportes");
 }
 
 export default async function GuiaDetallePage({
@@ -103,19 +112,142 @@ export default async function GuiaDetallePage({
   const totalCalc = items.reduce((acc, it) => acc + Number(it.subtotal ?? 0), 0);
   const totalShow = (g.total ?? 0) > 0 ? Number(g.total) : totalCalc;
   const valorFleteShow = Number(g.valor_flete ?? 0);
+  const isAnulada = String(g.estado_facturacion ?? "").toUpperCase() === "ANULADA";
 
   return (
     <div style={{ padding: "2rem" }}>
-      <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: "1rem",
+          marginBottom: "1rem",
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
         <Link href="/guias" className="underline">
           ← Volver
         </Link>
         <Link href={`/guias/${g.id}/print`} target="_blank" className="underline">
           🖨️ Imprimir Ticket
         </Link>
+        <Link href={`/guias/${g.id}/editar`} className="underline">
+          ✏️ Editar guía
+        </Link>
       </div>
 
-      <div style={{ border: "1px solid #000", padding: "1.5rem" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: "0.75rem",
+          marginBottom: "1rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <form
+          action={async () => {
+            "use server";
+            await cambiarEstado(g.id, "PENDIENTE");
+          }}
+        >
+          <button
+            type="submit"
+            style={{
+              padding: "0.7rem 1rem",
+              borderRadius: 10,
+              border: "1px solid #d1d5db",
+              background: "#fff",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Marcar Pendiente
+          </button>
+        </form>
+
+        <form
+          action={async () => {
+            "use server";
+            await cambiarEstado(g.id, "FACTURADO");
+          }}
+        >
+          <button
+            type="submit"
+            style={{
+              padding: "0.7rem 1rem",
+              borderRadius: 10,
+              border: "1px solid #d1d5db",
+              background: "#fff",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Marcar Facturado
+          </button>
+        </form>
+
+        <form
+          action={async () => {
+            "use server";
+            await cambiarEstado(g.id, "PAGADO");
+          }}
+        >
+          <button
+            type="submit"
+            style={{
+              padding: "0.7rem 1rem",
+              borderRadius: 10,
+              border: "1px solid #d1d5db",
+              background: "#fff",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Marcar Pagado
+          </button>
+        </form>
+
+        <form
+          action={async () => {
+            "use server";
+            await cambiarEstado(g.id, "ANULADA");
+          }}
+        >
+          <button
+            type="submit"
+            style={{
+              padding: "0.7rem 1rem",
+              borderRadius: 10,
+              border: "1px solid #991b1b",
+              background: "#fff",
+              color: "#991b1b",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Anular guía
+          </button>
+        </form>
+      </div>
+
+      <div style={{ border: "1px solid #000", padding: "1.5rem", position: "relative" }}>
+        {isAnulada && (
+          <div
+            style={{
+              position: "absolute",
+              top: 18,
+              right: 18,
+              background: "#991b1b",
+              color: "#fff",
+              padding: "0.45rem 0.7rem",
+              borderRadius: 8,
+              fontWeight: 800,
+            }}
+          >
+            ANULADA
+          </div>
+        )}
+
         <h1 style={{ fontSize: "2rem", fontWeight: 700, marginBottom: "1rem" }}>
           Guía N° {g.numero ?? "-"}
         </h1>

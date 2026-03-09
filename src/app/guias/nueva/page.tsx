@@ -31,6 +31,7 @@ const ESTADOS_FACT = [
   { value: "PENDIENTE", label: "Pendiente" },
   { value: "FACTURADO", label: "Facturado" },
   { value: "PAGADO", label: "Pagado" },
+  { value: "ANULADA", label: "Anulada" },
 ] as const;
 
 const SECTORES = [
@@ -39,12 +40,12 @@ const SECTORES = [
 ] as const;
 
 const CLIENTES_OCULTOS = new Set([
-  "A. FRANKE",
   "A.FRANKE",
-  "A. PILAUCO",
+  "A. FRANKE",
   "A.PILAUCO",
-  "A. RIO NEGRO",
+  "A. PILAUCO",
   "A.RIO NEGRO",
+  "A. RIO NEGRO",
 ]);
 
 function todayChileYYYYMMDD() {
@@ -241,7 +242,7 @@ export default function NuevaGuiaPage() {
   const [productos, setProductos] = useState<Producto[]>([]);
   const [transportes, setTransportes] = useState<Transporte[]>([]);
 
-  const [fecha, setFecha] = useState("");
+  const [fecha, setFecha] = useState(todayChileYYYYMMDD());
   const [clienteId, setClienteId] = useState<string>("");
   const [clienteManual, setClienteManual] = useState<string>("");
 
@@ -266,10 +267,6 @@ export default function NuevaGuiaPage() {
   const [items, setItems] = useState<ItemDraft[]>([
     { producto_id: "", cantidad_m3: "", precio_m3: "" },
   ]);
-
-  useEffect(() => {
-    setFecha(todayChileYYYYMMDD());
-  }, []);
 
   useEffect(() => {
     const load = async () => {
