@@ -1,60 +1,20 @@
-import { NextResponse } from "next/server";
-import * as XLSX from "xlsx";
-import { supabase } from "@/lib/supabase";
+import { NextResponse } from "next/server"
+import { supabase } from "@/lib/supabase"
+import * as XLSX from "xlsx"
 
-type NombreRel = { nombre: string } | { nombre: string }[] | null;
-
-type GuiaRow = {
-  id: string;
-  numero: number | null;
-  fecha: string | null;
-  faena: string | null;
-  chofer: string | null;
-  patente: string | null;
-  valor_flete: number | null;
-  medio_pago: string | null;
-  clientes?: NombreRel;
-  transportes?: NombreRel;
-};
-
-type ItemRow = {
-  guia_id: string;
-  cantidad_m3: number | null;
-  precio_m3: number | null;
-};
-
-function safeNum(v: unknown) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function getNombre(rel?: NombreRel): string {
-  if (!rel) return "";
-  if (Array.isArray(rel)) return rel[0]?.nombre ?? "";
-  return rel.nombre ?? "";
-}
-
-function medioPagoLabel(v: string | null) {
-  if (!v) return "-";
-  const x = String(v).toUpperCase();
-  if (x === "BANCO_CHILE") return "Banco de Chile";
-  if (x === "BANCO_ESTADO") return "Banco Estado";
-  if (x === "EFECTIVO") return "Efectivo";
-  if (x === "CREDITO") return "Crédito";
-  return v;
+function n(v: any) {
+  const x = Number(v)
+  return Number.isFinite(x) ? x : 0
 }
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
 
-  const desde = searchParams.get("desde");
-  const hasta = searchParams.get("hasta");
+  const { searchParams } = new URL(req.url)
 
-  if (!desde || !hasta) {
-    return NextResponse.json({ error: "Fechas requeridas" }, { status: 400 });
-  }
+  const desde = searchParams.get("desde")
+  const hasta = searchParams.get("hasta")
 
-  const { data: guiasData, error: guiasError } = await supabase
+  const { data: guias } = await supabase
     .from("guias")
     .select(`
       id,
@@ -69,206 +29,152 @@ export async function GET(req: Request) {
       transportes(nombre)
     `)
     .gte("fecha", desde)
-    .lte("fecha", hasta);
+    .lte("fecha", hasta)
 
-  if (guiasError) {
-    return NextResponse.json({ error: guiasError.message }, { status: 500 });
-  }
+  const guiaIds = guias?.map(g => g.id) ?? []
 
-  const guias = ((guiasData ?? []) as unknown as GuiaRow[]).filter(
-    (g) => safeNum(g.valor_flete) > 0
-  );
+  const { data: items } = await supabase
+    .from("guia_items")
+    .select(`
+      guia_id,
+      producto_id,
+      cantidad_m3,
+      precio_m3
+    `)
+    .in("guia_id", guiaIds)
 
-  const guiaIds = guias.map((g) => g.id);
+  const { data: productos } = await supabase
+    .from("productos")
+    .select("id,nombre")
 
-  let items: ItemRow[] = [];
-  if (guiaIds.length > 0) {
-    const { data: itemsData, error: itemsError } = await supabase
-      .from("guia_items")
-      .select("guia_id, cantidad_m3, precio_m3")
-      .in("guia_id", guiaIds);
+  const prodMap = new Map()
+  productos?.forEach(p => prodMap.set(p.id, p.nombre))
 
-    if (itemsError) {
-      return NextResponse.json({ error: itemsError.message }, { status: 500 });
+  const guiaMap = new Map()
+  guias?.forEach(g => guiaMap.set(g.id, g))
+
+  /* ================================
+     DETALLE FLETES
+  ================================= */
+
+  const detalle = items?.map(it => {
+
+    const g = guiaMap.get(it.guia_id)
+
+    const m3 = n(it.cantidad_m3)
+    const precio = n(it.precio_m3)
+
+    const totalMaterial = m3 * precio
+    const flete = n(g?.valor_flete)
+
+    const ganancia = totalMaterial - flete
+
+    return {
+      Numero_guia: g?.numero,
+      Fecha: g?.fecha,
+      Cliente: g?.clientes?.nombre ?? "",
+      Faena: g?.faena ?? "",
+      Transporte: g?.transportes?.nombre ?? "ARIGRAV",
+      Chofer: g?.chofer ?? "",
+      Patente: g?.patente ?? "",
+      Producto: prodMap.get(it.producto_id) ?? "",
+      m3,
+      Precio: precio,
+      Total_material: totalMaterial,
+      Valor_flete: flete,
+      Total_ganancia: ganancia,
+      Medio_pago: g?.medio_pago ?? ""
     }
 
-    items = (itemsData ?? []) as ItemRow[];
-  }
+  }) ?? []
 
-  const detalleMap = new Map<
-    string,
-    {
-      GUIA: number | string;
-      FECHA: string;
-      CLIENTE: string;
-      FAENA: string;
-      TRANSPORTE: string;
-      CHOFER: string;
-      PATENTE: string;
-      METODO_PAGO: string;
-      M3: number;
-      VALOR_FLETE: number;
-      TOTAL_MATERIAL: number;
-      TOTAL_GUIA: number;
-    }
-  >();
+  /* ================================
+     RESUMEN TRANSPORTE
+  ================================= */
 
-  for (const g of guias) {
-    const valorFlete = safeNum(g.valor_flete);
-    if (valorFlete <= 0) continue;
+  const transporteMap = new Map()
 
-    detalleMap.set(g.id, {
-      GUIA: g.numero ?? "-",
-      FECHA: g.fecha ?? "-",
-      CLIENTE: getNombre(g.clientes),
-      FAENA: g.faena ?? "-",
-      TRANSPORTE: getNombre(g.transportes) || "ARIGRAV",
-      CHOFER: g.chofer ?? "-",
-      PATENTE: g.patente ?? "-",
-      METODO_PAGO: medioPagoLabel(g.medio_pago),
-      M3: 0,
-      VALOR_FLETE: valorFlete,
-      TOTAL_MATERIAL: 0,
-      TOTAL_GUIA: valorFlete,
-    });
-  }
+  detalle.forEach(r => {
 
-  for (const it of items) {
-    const row = detalleMap.get(it.guia_id);
-    if (!row) continue;
+    const key = r.Transporte
 
-    const m3 = safeNum(it.cantidad_m3);
-    const precio = safeNum(it.precio_m3);
+    if (!transporteMap.has(key)) {
 
-    row.M3 += m3;
-    row.TOTAL_MATERIAL += m3 * precio;
-    row.TOTAL_GUIA = row.TOTAL_MATERIAL + row.VALOR_FLETE;
-  }
+      transporteMap.set(key, {
+        Transporte: key,
+        Viajes: 0,
+        m3: 0,
+        Total_fletes: 0
+      })
 
-  const detalle = Array.from(detalleMap.values()).sort((a, b) => {
-    if (a.FECHA === b.FECHA) {
-      return String(a.GUIA).localeCompare(String(b.GUIA), "es", { numeric: true });
-    }
-    return a.FECHA.localeCompare(b.FECHA);
-  });
-
-  const resumenTransporteMap = new Map<
-    string,
-    {
-      TRANSPORTE: string;
-      VIAJES: number;
-      TOTAL_M3: number;
-      TOTAL_FLETES: number;
-      PROM_FLETE_VIAJE: number;
-    }
-  >();
-
-  const resumenChoferMap = new Map<
-    string,
-    {
-      CHOFER: string;
-      VIAJES: number;
-      TOTAL_M3: number;
-      TOTAL_FLETES: number;
-      PROM_FLETE_VIAJE: number;
-    }
-  >();
-
-  for (const r of detalle) {
-    if (safeNum(r.VALOR_FLETE) <= 0) continue;
-
-    const keyT = String(r.TRANSPORTE || "SIN TRANSPORTE").trim().toUpperCase();
-    if (!resumenTransporteMap.has(keyT)) {
-      resumenTransporteMap.set(keyT, {
-        TRANSPORTE: r.TRANSPORTE || "SIN TRANSPORTE",
-        VIAJES: 0,
-        TOTAL_M3: 0,
-        TOTAL_FLETES: 0,
-        PROM_FLETE_VIAJE: 0,
-      });
     }
 
-    const aggT = resumenTransporteMap.get(keyT)!;
-    aggT.VIAJES += 1;
-    aggT.TOTAL_M3 += safeNum(r.M3);
-    aggT.TOTAL_FLETES += safeNum(r.VALOR_FLETE);
-    aggT.PROM_FLETE_VIAJE = aggT.VIAJES > 0 ? aggT.TOTAL_FLETES / aggT.VIAJES : 0;
+    const row = transporteMap.get(key)
 
-    const keyC = String(r.CHOFER || "SIN CHOFER").trim().toUpperCase();
-    if (!resumenChoferMap.has(keyC)) {
-      resumenChoferMap.set(keyC, {
-        CHOFER: r.CHOFER || "SIN CHOFER",
-        VIAJES: 0,
-        TOTAL_M3: 0,
-        TOTAL_FLETES: 0,
-        PROM_FLETE_VIAJE: 0,
-      });
+    row.Viajes += 1
+    row.m3 += r.m3
+    row.Total_fletes += r.Valor_flete
+
+  })
+
+  const resumenTransporte = Array.from(transporteMap.values())
+
+  /* ================================
+     RESUMEN CHOFER
+  ================================= */
+
+  const choferMap = new Map()
+
+  detalle.forEach(r => {
+
+    const key = r.Chofer
+
+    if (!choferMap.has(key)) {
+
+      choferMap.set(key, {
+        Chofer: key,
+        Viajes: 0,
+        m3: 0,
+        Total_fletes: 0
+      })
+
     }
 
-    const aggC = resumenChoferMap.get(keyC)!;
-    aggC.VIAJES += 1;
-    aggC.TOTAL_M3 += safeNum(r.M3);
-    aggC.TOTAL_FLETES += safeNum(r.VALOR_FLETE);
-    aggC.PROM_FLETE_VIAJE = aggC.VIAJES > 0 ? aggC.TOTAL_FLETES / aggC.VIAJES : 0;
-  }
+    const row = choferMap.get(key)
 
-  const resumenTransporte = Array.from(resumenTransporteMap.values()).sort(
-    (a, b) => b.TOTAL_FLETES - a.TOTAL_FLETES
-  );
+    row.Viajes += 1
+    row.m3 += r.m3
+    row.Total_fletes += r.Valor_flete
 
-  const resumenChofer = Array.from(resumenChoferMap.values()).sort(
-    (a, b) => b.TOTAL_FLETES - a.TOTAL_FLETES
-  );
+  })
 
-  const wb = XLSX.utils.book_new();
+  const resumenChofer = Array.from(choferMap.values())
 
-  const wsDetalle = XLSX.utils.json_to_sheet(detalle);
-  wsDetalle["!cols"] = [
-    { wch: 12 },
-    { wch: 14 },
-    { wch: 28 },
-    { wch: 22 },
-    { wch: 20 },
-    { wch: 22 },
-    { wch: 14 },
-    { wch: 18 },
-    { wch: 10 },
-    { wch: 14 },
-    { wch: 16 },
-    { wch: 14 },
-  ];
-  XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle Fletes");
+  /* ================================
+     EXCEL
+  ================================= */
 
-  const wsTransporte = XLSX.utils.json_to_sheet(resumenTransporte);
-  wsTransporte["!cols"] = [
-    { wch: 22 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 16 },
-    { wch: 18 },
-  ];
-  XLSX.utils.book_append_sheet(wb, wsTransporte, "Resumen Transporte");
+  const wb = XLSX.utils.book_new()
 
-  const wsChofer = XLSX.utils.json_to_sheet(resumenChofer);
-  wsChofer["!cols"] = [
-    { wch: 24 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 16 },
-    { wch: 18 },
-  ];
-  XLSX.utils.book_append_sheet(wb, wsChofer, "Resumen Chofer");
+  const wsDetalle = XLSX.utils.json_to_sheet(detalle)
+  const wsTransporte = XLSX.utils.json_to_sheet(resumenTransporte)
+  const wsChofer = XLSX.utils.json_to_sheet(resumenChofer)
+
+  XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle Fletes")
+  XLSX.utils.book_append_sheet(wb, wsTransporte, "Resumen Transporte")
+  XLSX.utils.book_append_sheet(wb, wsChofer, "Resumen Chofer")
 
   const buffer = XLSX.write(wb, {
     type: "buffer",
-    bookType: "xlsx",
-  });
+    bookType: "xlsx"
+  })
 
   return new NextResponse(buffer, {
     headers: {
+      "Content-Disposition": `attachment; filename=Fletes_${desde}_${hasta}.xlsx`,
       "Content-Type":
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename=RESUMEN_FLETES_${desde}_${hasta}.xlsx`,
-    },
-  });
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    }
+  })
+
 }

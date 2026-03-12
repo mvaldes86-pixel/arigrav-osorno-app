@@ -2,13 +2,11 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
 type TabKey =
-  | "dashboard"
   | "facturacion"
   | "produccion"
   | "camiones"
   | "productos"
-  | "clientes"
-  | "cobranza";
+  | "clientes";
 
 type NombreRel = { nombre: string } | { nombre: string }[] | null;
 
@@ -57,20 +55,6 @@ type ProductoRow = {
   nombre: string;
 };
 
-type DetalleTransporteRow = {
-  transporte: string;
-  cliente: string;
-  producto: string;
-  m3: number;
-  fecha: string;
-  valorFlete: number;
-  numeroGuia: number | string;
-  chofer: string;
-  patente: string;
-  medioPago: string;
-  faena: string;
-};
-
 type FacturacionDetalleRow = {
   cliente: string;
   fecha: string;
@@ -84,7 +68,7 @@ type FacturacionDetalleRow = {
   precioM3: number;
   netoMaterial: number;
   valorFlete: number;
-  totalLinea: number;
+  totalGanancia: number;
   medioPago: string;
   estadoFacturacion: string;
 };
@@ -137,7 +121,7 @@ type FleteDetalleRow = {
   m3: number;
   valorFlete: number;
   totalMaterial: number;
-  totalGuia: number;
+  totalGanancia: number;
 };
 
 type FleteResumenTransporteRow = {
@@ -145,7 +129,6 @@ type FleteResumenTransporteRow = {
   viajes: number;
   m3: number;
   totalFletes: number;
-  promFleteViaje: number;
 };
 
 type FleteResumenChoferRow = {
@@ -153,7 +136,22 @@ type FleteResumenChoferRow = {
   viajes: number;
   m3: number;
   totalFletes: number;
-  promFleteViaje: number;
+};
+
+type ResumenSemanaRow = {
+  transporte: string;
+  empresa: string;
+  material: string;
+  cubos: number;
+  fecha: string;
+  precio: number;
+  neto: number;
+  flete: number;
+  total: number;
+  report: number | string;
+  chofer: string;
+  patente: string;
+  pozoPago: string;
 };
 
 /* ======================
@@ -205,11 +203,6 @@ function normName(v: string | null) {
   return v.trim().replace(/\s+/g, " ").toUpperCase();
 }
 
-function normPatente(v: string | null) {
-  if (!v) return "";
-  return v.trim().replace(/\s+/g, "").toUpperCase();
-}
-
 function getNombre(rel?: NombreRel): string {
   if (!rel) return "";
   if (Array.isArray(rel)) return rel[0]?.nombre ?? "";
@@ -224,36 +217,17 @@ function getTransporteName(g: GuiaRow) {
   return getNombre(g.transportes) || "ARIGRAV";
 }
 
+function pozoPagoLabel(g: GuiaRow) {
+  const faena = (g.faena ?? "").trim();
+  const pago = medioPagoLabel(g.medio_pago);
+  if (faena && pago && pago !== "-") return `${faena} / ${pago}`;
+  if (faena) return faena;
+  if (pago && pago !== "-") return pago;
+  return "-";
+}
+
 function isGuiaActiva(g: GuiaRow) {
   return String(g.estado_facturacion ?? "").toUpperCase() !== "ANULADA";
-}
-
-function daysAgo(fechaISO: string) {
-  const start = new Date(`${fechaISO}T00:00:00`);
-  const today = new Date();
-  const end = new Date(`${toISODate(today)}T00:00:00`);
-  const diff = end.getTime() - start.getTime();
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  return Number.isFinite(days) ? days : 0;
-}
-
-type AgingBucketKey = "0_7" | "8_15" | "16_30" | "31_plus" | "sin_fecha";
-
-function bucketLabel(k: AgingBucketKey) {
-  if (k === "0_7") return "0–7 días";
-  if (k === "8_15") return "8–15 días";
-  if (k === "16_30") return "16–30 días";
-  if (k === "31_plus") return "+30 días";
-  return "Sin fecha";
-}
-
-function getBucketFromGuiaFecha(fecha: string | null): AgingBucketKey {
-  if (!fecha) return "sin_fecha";
-  const d = daysAgo(fecha);
-  if (d <= 7) return "0_7";
-  if (d <= 15) return "8_15";
-  if (d <= 30) return "16_30";
-  return "31_plus";
 }
 
 /* ======================
@@ -324,9 +298,6 @@ function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string
 
       <div className="section">
         <div className="tabs">
-          <Link className={`tab ${tab === "dashboard" ? "active" : ""}`} href={mk("dashboard")}>
-            Dashboard
-          </Link>
           <Link className={`tab ${tab === "facturacion" ? "active" : ""}`} href={mk("facturacion")}>
             Facturación
           </Link>
@@ -341,9 +312,6 @@ function Tabs({ tab, desde, hasta }: { tab: TabKey; desde: string; hasta: string
           </Link>
           <Link className={`tab ${tab === "clientes" ? "active" : ""}`} href={mk("clientes")}>
             Clientes
-          </Link>
-          <Link className={`tab ${tab === "cobranza" ? "active" : ""}`} href={mk("cobranza")}>
-            Cobranza (Aging)
           </Link>
         </div>
       </div>
@@ -436,343 +404,6 @@ function Bar({ pct }: { pct: number }) {
 }
 
 /* ======================
-   TAB 1: DASHBOARD
-   ====================== */
-function buildDashboard(guias: GuiaRow[], items: ItemRow[], productosMap: Map<string, string>) {
-  const guiaIds = new Set(guias.map((g) => g.id));
-  const itemsOk = items.filter((it) => guiaIds.has(it.guia_id));
-
-  const totalM3 = itemsOk.reduce((s, it) => s + safeNum(it.cantidad_m3), 0);
-  const guiasCount = guias.length;
-
-  const clientesDistintos = new Set(
-    guias.map((g) => (g.cliente_id ? `ID:${g.cliente_id}` : `TXT:${getClientName(g)}`))
-  ).size;
-
-  const promM3Guia = guiasCount > 0 ? totalM3 / guiasCount : 0;
-
-  const totalFletes = guias.reduce((s, g) => s + safeNum(g.valor_flete), 0);
-  const promFleteGuia = guiasCount > 0 ? totalFletes / guiasCount : 0;
-
-  const prodAgg = new Map<string, number>();
-  for (const it of itemsOk) {
-    const pid = it.producto_id ?? "";
-    if (!pid) continue;
-    prodAgg.set(pid, (prodAgg.get(pid) ?? 0) + safeNum(it.cantidad_m3));
-  }
-  const topProductos = Array.from(prodAgg.entries())
-    .map(([pid, m3]) => ({ producto: productosMap.get(pid) ?? "(producto)", m3 }))
-    .sort((a, b) => b.m3 - a.m3)
-    .slice(0, 5);
-
-  const guiaMap = new Map<string, GuiaRow>();
-  for (const g of guias) guiaMap.set(g.id, g);
-
-  const cliAgg = new Map<string, number>();
-  for (const it of itemsOk) {
-    const g = guiaMap.get(it.guia_id);
-    if (!g) continue;
-    const key = getClientName(g);
-    cliAgg.set(key, (cliAgg.get(key) ?? 0) + safeNum(it.cantidad_m3));
-  }
-  const topClientes = Array.from(cliAgg.entries())
-    .map(([cliente, m3]) => ({ cliente, m3 }))
-    .sort((a, b) => b.m3 - a.m3)
-    .slice(0, 5);
-
-  const mpAgg = new Map<string, number>();
-  for (const g of guias) {
-    const k = medioPagoLabel(g.medio_pago ?? null);
-    mpAgg.set(k, (mpAgg.get(k) ?? 0) + 1);
-  }
-  const mediosPago = Array.from(mpAgg.entries())
-    .map(([medio, guias]) => ({ medio, guias }))
-    .sort((a, b) => b.guias - a.guias);
-
-  const transporteAgg = new Map<string, number>();
-  for (const g of guias) {
-    const nombre = getTransporteName(g);
-    const flete = safeNum(g.valor_flete);
-    if (flete <= 0) continue;
-    transporteAgg.set(nombre, (transporteAgg.get(nombre) ?? 0) + flete);
-  }
-
-  const topTransportes = Array.from(transporteAgg.entries())
-    .map(([transporte, totalFlete]) => ({ transporte, totalFlete }))
-    .sort((a, b) => b.totalFlete - a.totalFlete)
-    .slice(0, 5);
-
-  return {
-    totalM3,
-    guiasCount,
-    clientesDistintos,
-    promM3Guia,
-    totalFletes,
-    promFleteGuia,
-    topProductos,
-    topClientes,
-    mediosPago,
-    topTransportes,
-  };
-}
-
-function DashboardTab({
-  desde,
-  hasta,
-  data,
-  detalleRows,
-}: {
-  desde: string;
-  hasta: string;
-  data: ReturnType<typeof buildDashboard>;
-  detalleRows: DetalleTransporteRow[];
-}) {
-  const totalFletesDetalle = detalleRows.reduce((s, r) => s + safeNum(r.valorFlete), 0);
-  const totalM3Detalle = detalleRows.reduce((s, r) => s + safeNum(r.m3), 0);
-
-  return (
-    <>
-      <div className="card" style={{ marginTop: 14 }}>
-        <div className="section">
-          <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Dashboard Operativo</h2>
-
-          <div className="kpiGrid" style={{ marginTop: 16 }}>
-            <KPI label="Total m³" value={formatNumber(data.totalM3, 2)} />
-            <KPI label="Guías" value={String(data.guiasCount)} />
-            <KPI label="Clientes atendidos" value={String(data.clientesDistintos)} />
-            <KPI label="Promedio m³ / guía" value={formatNumber(data.promM3Guia, 2)} />
-            <KPI label="Total fletes" value={formatCLP(data.totalFletes)} />
-            <KPI label="Promedio flete / guía" value={formatCLP(data.promFleteGuia)} />
-            <KPI label="Desde" value={desde} />
-            <KPI label="Hasta" value={hasta} />
-          </div>
-
-          <div className="spacer" />
-
-          <div className="grid3">
-            <div className="cardInner">
-              <div className="cardTitle">Top 5 productos por m³</div>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Producto</th>
-                    <th style={{ textAlign: "right" }}>m³</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.topProductos.length === 0 ? (
-                    <tr>
-                      <td colSpan={2} className="muted" style={{ padding: 14 }}>
-                        Sin datos.
-                      </td>
-                    </tr>
-                  ) : (
-                    data.topProductos.map((r, i) => (
-                      <tr key={i}>
-                        <td>{r.producto}</td>
-                        <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="cardInner">
-              <div className="cardTitle">Top 5 clientes por m³</div>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Cliente</th>
-                    <th style={{ textAlign: "right" }}>m³</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.topClientes.length === 0 ? (
-                    <tr>
-                      <td colSpan={2} className="muted" style={{ padding: 14 }}>
-                        Sin datos.
-                      </td>
-                    </tr>
-                  ) : (
-                    data.topClientes.map((r, i) => (
-                      <tr key={i}>
-                        <td>{r.cliente}</td>
-                        <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="cardInner">
-              <div className="cardTitle">Medio de pago (cantidad de guías)</div>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Medio</th>
-                    <th style={{ textAlign: "right" }}>Guías</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.mediosPago.length === 0 ? (
-                    <tr>
-                      <td colSpan={2} className="muted" style={{ padding: 14 }}>
-                        Sin datos.
-                      </td>
-                    </tr>
-                  ) : (
-                    data.mediosPago.map((r, i) => (
-                      <tr key={i}>
-                        <td>{r.medio}</td>
-                        <td style={{ textAlign: "right", fontWeight: 800 }}>{r.guias}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="spacer" />
-
-          <div className="cardInner">
-            <div className="cardTitle">Top transportes por costo de flete</div>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Transporte</th>
-                  <th style={{ textAlign: "right" }}>Total flete</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.topTransportes.length === 0 ? (
-                  <tr>
-                    <td colSpan={2} className="muted" style={{ padding: 14 }}>
-                      Sin datos.
-                    </td>
-                  </tr>
-                ) : (
-                  data.topTransportes.map((r, i) => (
-                    <tr key={i}>
-                      <td>{r.transporte}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalFlete)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="spacer" />
-
-          <div className="row">
-            <Link className="btn" href={`/guias?desde=${desde}&hasta=${hasta}`}>
-              Ver guías
-            </Link>
-            <Link className="btn btnPrimary" href="/guias/nueva">
-              + Nueva guía
-            </Link>
-            <Link className="btn" href={`/reportes?tab=facturacion&desde=${desde}&hasta=${hasta}`}>
-              Ir a Facturación
-            </Link>
-          </div>
-        </div>
-      </div>
-
-      <div className="card" style={{ marginTop: 20 }}>
-        <div className="section">
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 12,
-              alignItems: "center",
-              flexWrap: "wrap",
-            }}
-          >
-            <div>
-              <h3 style={{ margin: 0, fontSize: 26, fontWeight: 900 }}>Resumen de la semana</h3>
-              <div className="muted" style={{ marginTop: 6 }}>
-                Transporte, empresa/cliente, material/producto, m³, fecha, valor flete, número guía,
-                chofer, patente, método pago y faena.
-              </div>
-            </div>
-
-            <a
-              className="btn btnPrimary"
-              href={`/reportes/camiones-export?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(
-                hasta
-              )}`}
-            >
-              Descargar Resumen Semana
-            </a>
-          </div>
-
-          <div className="spacer" />
-
-          <div className="kpiGrid">
-            <KPI label="Filas detalle" value={String(detalleRows.length)} />
-            <KPI label="m³ detalle" value={formatNumber(totalM3Detalle, 2)} />
-            <KPI label="Total fletes" value={formatCLP(totalFletesDetalle)} />
-            <KPI label="Desde / Hasta" value={`${desde} → ${hasta}`} />
-          </div>
-
-          <div className="spacer" />
-
-          <div className="cardInner">
-            <div className="cardTitle">Detalle de transportes</div>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Transporte</th>
-                  <th>Empresa / Cliente</th>
-                  <th>Material / Producto</th>
-                  <th style={{ textAlign: "right" }}>m³</th>
-                  <th>Fecha</th>
-                  <th style={{ textAlign: "right" }}>Valor flete</th>
-                  <th>N° Guía</th>
-                  <th>Chofer</th>
-                  <th>Patente</th>
-                  <th>Método pago</th>
-                  <th>Faena</th>
-                </tr>
-              </thead>
-              <tbody>
-                {detalleRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={11} className="muted" style={{ padding: 14 }}>
-                      Sin datos en este rango.
-                    </td>
-                  </tr>
-                ) : (
-                  detalleRows.map((r, i) => (
-                    <tr key={`${r.fecha}-${r.numeroGuia}-${r.patente}-${i}`}>
-                      <td>{r.transporte}</td>
-                      <td style={{ fontWeight: 800 }}>{r.cliente}</td>
-                      <td>{r.producto}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
-                      <td>{r.fecha}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.valorFlete)}</td>
-                      <td>{r.numeroGuia}</td>
-                      <td>{r.chofer}</td>
-                      <td>{r.patente}</td>
-                      <td>{r.medioPago}</td>
-                      <td>{r.faena}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-/* ======================
    TAB 2: FACTURACIÓN
    ====================== */
 function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<string, string>) {
@@ -808,7 +439,7 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
     const precioM3 = safeNum(it.precio_m3);
     const netoMaterial = m3 * precioM3;
     const valorFlete = safeNum(g.valor_flete);
-    const totalLinea = netoMaterial + valorFlete;
+    const totalGanancia = netoMaterial - valorFlete;
     const estado = String(g.estado_facturacion ?? "").toUpperCase() || "-";
 
     detalleRows.push({
@@ -824,7 +455,7 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
       precioM3,
       netoMaterial,
       valorFlete,
-      totalLinea,
+      totalGanancia,
       medioPago: medioPagoLabel(g.medio_pago),
       estadoFacturacion: estado,
     });
@@ -852,7 +483,7 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
       fletesSumados.add(g.id);
     }
 
-    resumen.totalGeneral = resumen.netoMateriales + resumen.totalFletes;
+    resumen.totalGeneral = resumen.netoMateriales - resumen.totalFletes;
     resumen.guiaIds.add(g.id);
     resumen.guias = resumen.guiaIds.size;
     if (estado !== "PAGADO") resumen.estado = "Pendiente";
@@ -906,14 +537,9 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
     totalFacturado,
     totalPendiente,
     totalFletes,
-    totalGeneral: totalGeneralMaterial + totalFletes,
+    totalMateriales: totalGeneralMaterial,
+    totalGanancia: totalGeneralMaterial - totalFletes,
     guiasCredito,
-    tabla: resumenClientes.map((r) => ({
-      cliente: r.cliente,
-      facturado: r.netoMateriales,
-      pendiente: r.estado === "Pendiente" ? r.totalGeneral : 0,
-      estado: r.estado,
-    })),
     resumenClientes,
     resumenProductos,
     detalleRows: detalleOrdenado,
@@ -965,9 +591,9 @@ function FacturacionTab({
         </div>
 
         <div className="kpiGrid" style={{ marginTop: 16 }}>
-          <KPI label="Total materiales" value={formatCLP(data.totalFacturado + data.totalPendiente)} />
+          <KPI label="Total materiales" value={formatCLP(data.totalMateriales)} />
           <KPI label="Total fletes" value={formatCLP(data.totalFletes)} />
-          <KPI label="Total general" value={formatCLP(data.totalGeneral)} />
+          <KPI label="Total ganancia" value={formatCLP(data.totalGanancia)} />
           <KPI label="Guías en crédito / por cobrar" value={String(data.guiasCredito)} />
           <KPI label="Guías Banco Chile" value={data.bancoChile} />
           <KPI label="Guías Banco Estado" value={data.bancoEstado} />
@@ -978,7 +604,9 @@ function FacturacionTab({
         <div className="spacer" />
 
         <div className="cardInner">
-          <div className="cardTitle">Resumen por cliente</div>
+          <div className="cardTitle" style={{ fontSize: 18, fontWeight: 900 }}>
+            Resumen por cliente
+          </div>
           <table className="table">
             <thead>
               <tr>
@@ -987,7 +615,7 @@ function FacturacionTab({
                 <th style={{ textAlign: "right" }}>m³</th>
                 <th style={{ textAlign: "right" }}>Neto materiales</th>
                 <th style={{ textAlign: "right" }}>Fletes</th>
-                <th style={{ textAlign: "right" }}>Total general</th>
+                <th style={{ textAlign: "right" }}>Total ganancia</th>
                 <th>Estado</th>
               </tr>
             </thead>
@@ -1018,14 +646,16 @@ function FacturacionTab({
         <div className="spacer" />
 
         <div className="cardInner">
-          <div className="cardTitle">Resumen por cliente y producto</div>
+          <div className="cardTitle" style={{ fontSize: 18, fontWeight: 900 }}>
+            Resumen por cliente y producto
+          </div>
           <table className="table">
             <thead>
               <tr>
                 <th>Cliente</th>
                 <th>Producto</th>
                 <th style={{ textAlign: "right" }}>m³</th>
-                <th style={{ textAlign: "right" }}>Precio prom.</th>
+                <th style={{ textAlign: "right" }}>Precio</th>
                 <th style={{ textAlign: "right" }}>Neto</th>
               </tr>
             </thead>
@@ -1054,7 +684,9 @@ function FacturacionTab({
         <div className="spacer" />
 
         <div className="cardInner">
-          <div className="cardTitle">Detalle facturable completo</div>
+          <div className="cardTitle" style={{ fontSize: 18, fontWeight: 900 }}>
+            Detalle facturable completo
+          </div>
 
           <div
             style={{
@@ -1084,7 +716,7 @@ function FacturacionTab({
                   <th style={{ textAlign: "right" }}>Precio/m³</th>
                   <th style={{ textAlign: "right" }}>Neto material</th>
                   <th style={{ textAlign: "right" }}>Valor flete</th>
-                  <th style={{ textAlign: "right" }}>Total línea</th>
+                  <th style={{ textAlign: "right" }}>Total ganancia</th>
                   <th>Método pago</th>
                   <th>Estado</th>
                 </tr>
@@ -1118,7 +750,7 @@ function FacturacionTab({
                       <td style={{ textAlign: "right" }}>{formatCLP(r.precioM3)}</td>
                       <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.netoMaterial)}</td>
                       <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.valorFlete)}</td>
-                      <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.totalLinea)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.totalGanancia)}</td>
                       <td>{r.medioPago}</td>
                       <td>{r.estadoFacturacion}</td>
                     </tr>
@@ -1138,8 +770,8 @@ function FacturacionTab({
           <Link className="btn btnPrimary" href="/guias/nueva">
             + Nueva guía
           </Link>
-          <Link className="btn" href={`/reportes?tab=dashboard&desde=${desde}&hasta=${hasta}`}>
-            Ir a Dashboard
+          <Link className="btn" href={`/reportes?tab=produccion&desde=${desde}&hasta=${hasta}`}>
+            Ir a Producción
           </Link>
         </div>
       </div>
@@ -1156,8 +788,18 @@ function buildProduccionPorDia(guias: GuiaRow[], items: ItemRow[]) {
 
   const byDay = new Map<
     string,
-    { guiaIds: Set<string>; clientes: Set<string>; m3: number; total: number; pendiente: number }
+    {
+      guiaIds: Set<string>;
+      clientes: Set<string>;
+      m3: number;
+      totalMateriales: number;
+      totalFletes: number;
+      totalGanancia: number;
+      pendiente: number;
+    }
   >();
+
+  const fletesSumadosPorDia = new Set<string>();
 
   for (const it of items) {
     const g = guiaMap.get(it.guia_id);
@@ -1167,7 +809,15 @@ function buildProduccionPorDia(guias: GuiaRow[], items: ItemRow[]) {
     if (!fecha) continue;
 
     if (!byDay.has(fecha)) {
-      byDay.set(fecha, { guiaIds: new Set(), clientes: new Set(), m3: 0, total: 0, pendiente: 0 });
+      byDay.set(fecha, {
+        guiaIds: new Set(),
+        clientes: new Set(),
+        m3: 0,
+        totalMateriales: 0,
+        totalFletes: 0,
+        totalGanancia: 0,
+        pendiente: 0,
+      });
     }
 
     const agg = byDay.get(fecha)!;
@@ -1179,11 +829,18 @@ function buildProduccionPorDia(guias: GuiaRow[], items: ItemRow[]) {
     const subtotal = m3 * precio;
 
     agg.m3 += m3;
-    agg.total += subtotal;
+    agg.totalMateriales += subtotal;
 
     if (String(g.estado_facturacion ?? "").toUpperCase() === "PENDIENTE") {
       agg.pendiente += subtotal;
     }
+
+    if (!fletesSumadosPorDia.has(g.id)) {
+      agg.totalFletes += safeNum(g.valor_flete);
+      fletesSumadosPorDia.add(g.id);
+    }
+
+    agg.totalGanancia = agg.totalMateriales - agg.totalFletes;
   }
 
   const days = Array.from(byDay.entries())
@@ -1195,32 +852,87 @@ function buildProduccionPorDia(guias: GuiaRow[], items: ItemRow[]) {
         m3: v.m3,
         guias: guiasCount,
         clientes: v.clientes.size,
-        totalCLP: v.total,
+        totalMateriales: v.totalMateriales,
+        totalFletes: v.totalFletes,
+        totalGanancia: v.totalGanancia,
         pendienteCLP: v.pendiente,
-        avgM3PorGuia: guiasCount > 0 ? v.m3 / guiasCount : 0,
-        avgCLPPorGuia: guiasCount > 0 ? v.total / guiasCount : 0,
       };
     });
 
   const totalM3 = days.reduce((s, d) => s + d.m3, 0);
   const totalGuias = days.reduce((s, d) => s + d.guias, 0);
-  const totalCLP = days.reduce((s, d) => s + d.totalCLP, 0);
+  const totalMateriales = days.reduce((s, d) => s + d.totalMateriales, 0);
+  const totalFletes = days.reduce((s, d) => s + d.totalFletes, 0);
+  const totalGanancia = days.reduce((s, d) => s + d.totalGanancia, 0);
   const totalPendiente = days.reduce((s, d) => s + d.pendienteCLP, 0);
 
   const best = [...days].sort((a, b) => b.m3 - a.m3)[0] ?? null;
   const worst = [...days].sort((a, b) => a.m3 - b.m3)[0] ?? null;
 
-  return { days, totalM3, totalGuias, totalCLP, totalPendiente, best, worst };
+  return {
+    days,
+    totalM3,
+    totalGuias,
+    totalMateriales,
+    totalFletes,
+    totalGanancia,
+    totalPendiente,
+    best,
+    worst,
+  };
+}
+
+function buildResumenSemana(guias: GuiaRow[], items: ItemRow[], productosMap: Map<string, string>) {
+  const guiaMap = new Map<string, GuiaRow>();
+  for (const g of guias) guiaMap.set(g.id, g);
+
+  const rows: ResumenSemanaRow[] = items
+    .map((it) => {
+      const g = guiaMap.get(it.guia_id);
+      if (!g) return null;
+
+      const cubos = safeNum(it.cantidad_m3);
+      const precio = safeNum(it.precio_m3);
+      const neto = cubos * precio;
+      const flete = safeNum(g.valor_flete);
+      const total = neto - flete;
+
+      return {
+        transporte: getTransporteName(g),
+        empresa: getClientName(g),
+        material: it.producto_id ? productosMap.get(it.producto_id) ?? "" : "",
+        cubos,
+        fecha: g.fecha ?? "",
+        precio,
+        neto,
+        flete,
+        total,
+        report: g.numero ?? "-",
+        chofer: g.chofer ?? "-",
+        patente: g.patente ?? "-",
+        pozoPago: pozoPagoLabel(g),
+      };
+    })
+    .filter(Boolean) as ResumenSemanaRow[];
+
+  return {
+    rows,
+    totalFilas: rows.length,
+    totalM3: rows.reduce((s, r) => s + safeNum(r.cubos), 0),
+    totalFletes: rows.reduce((s, r) => s + safeNum(r.flete), 0),
+  };
 }
 
 function ProduccionTab({
   desde,
   hasta,
   data,
+  resumenSemana,
 }: {
   desde: string;
   hasta: string;
   data: ReturnType<typeof buildProduccionPorDia>;
+  resumenSemana: ReturnType<typeof buildResumenSemana>;
 }) {
   const maxM3 = Math.max(1, ...data.days.map((d) => d.m3));
 
@@ -1229,22 +941,16 @@ function ProduccionTab({
       <div className="section">
         <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Producción por día</h2>
         <div className="muted" style={{ marginTop: 6 }}>
-          Tendencia diaria de m³, guías, clientes y $ (total / pendiente)
+          Tendencia diaria de m³, guías, clientes, materiales, fletes y ganancia.
         </div>
 
         <div className="kpiGrid" style={{ marginTop: 16 }}>
           <KPI label="Total m³ (rango)" value={formatNumber(data.totalM3, 2)} />
           <KPI label="Guías (rango)" value={String(data.totalGuias)} />
-          <KPI label="Total $" value={formatCLP(data.totalCLP)} />
+          <KPI label="Total materiales" value={formatCLP(data.totalMateriales)} />
+          <KPI label="Total fletes" value={formatCLP(data.totalFletes)} />
+          <KPI label="Total ganancia" value={formatCLP(data.totalGanancia)} />
           <KPI label="Pendiente $" value={formatCLP(data.totalPendiente)} />
-          <KPI
-            label="Prom. m³ / guía"
-            value={formatNumber(data.totalGuias > 0 ? data.totalM3 / data.totalGuias : 0, 2)}
-          />
-          <KPI
-            label="Prom. $ / guía"
-            value={formatCLP(data.totalGuias > 0 ? data.totalCLP / data.totalGuias : 0)}
-          />
         </div>
 
         <div className="spacer" />
@@ -1273,7 +979,7 @@ function ProduccionTab({
         <div className="card" style={{ border: "1px solid var(--line)" }}>
           <div className="toolbar" style={{ borderBottom: "1px solid var(--line)" }}>
             <div style={{ fontWeight: 900 }}>Detalle por día</div>
-            <div className="muted">Se calcula desde items (m³ * precio/m³) agrupado por fecha</div>
+            <div className="muted">Se calcula desde materiales menos fletes por fecha</div>
           </div>
 
           <div className="section" style={{ paddingTop: 10 }}>
@@ -1284,10 +990,10 @@ function ProduccionTab({
                   <th style={{ width: 140 }}>m³</th>
                   <th style={{ width: 90 }}>Guías</th>
                   <th style={{ width: 110 }}>Clientes</th>
-                  <th style={{ width: 140 }}>Total $</th>
+                  <th style={{ width: 140 }}>Materiales</th>
+                  <th style={{ width: 140 }}>Fletes</th>
+                  <th style={{ width: 140 }}>Ganancia</th>
                   <th style={{ width: 140 }}>Pendiente $</th>
-                  <th style={{ width: 160 }}>Prom. m³/guía</th>
-                  <th style={{ width: 160 }}>Prom. $/guía</th>
                 </tr>
               </thead>
               <tbody>
@@ -1309,10 +1015,10 @@ function ProduccionTab({
                       </td>
                       <td>{d.guias}</td>
                       <td>{d.clientes}</td>
-                      <td style={{ fontWeight: 900 }}>{formatCLP(d.totalCLP)}</td>
+                      <td style={{ fontWeight: 900 }}>{formatCLP(d.totalMateriales)}</td>
+                      <td style={{ fontWeight: 900 }}>{formatCLP(d.totalFletes)}</td>
+                      <td style={{ fontWeight: 900 }}>{formatCLP(d.totalGanancia)}</td>
                       <td style={{ fontWeight: 900 }}>{formatCLP(d.pendienteCLP)}</td>
-                      <td>{formatNumber(d.avgM3PorGuia, 2)}</td>
-                      <td>{formatCLP(d.avgCLPPorGuia)}</td>
                     </tr>
                   ))
                 )}
@@ -1333,7 +1039,94 @@ function ProduccionTab({
         </div>
 
         <div className="spacer" />
-        <div className="muted">Próximo paso: comparación vs periodo anterior (misma tabla).</div>
+
+        <div className="card" style={{ border: "1px solid var(--line)" }}>
+          <div className="section">
+            <h3 style={{ margin: 0, fontSize: 24, fontWeight: 900 }}>Resumen de la semana</h3>
+            <div className="muted" style={{ marginTop: 6 }}>
+              Transporte, empresa, material, cubos, fecha, precio, neto, flete, total, report, chofer,
+              patente y pozo/pago.
+            </div>
+
+            <div className="spacer" />
+
+            <div className="row">
+              <Link
+                className="btn btnPrimary"
+                href={`/reportes/camiones-export?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(
+                  hasta
+                )}`}
+              >
+                Descargar Resumen Semana
+              </Link>
+            </div>
+
+            <div className="kpiGrid" style={{ marginTop: 16 }}>
+              <KPI label="Filas detalle" value={String(resumenSemana.totalFilas)} />
+              <KPI label="m³ detalle" value={formatNumber(resumenSemana.totalM3, 2)} />
+              <KPI label="Total fletes" value={formatCLP(resumenSemana.totalFletes)} />
+              <KPI label="Desde / Hasta" value={`${desde} → ${hasta}`} />
+            </div>
+
+            <div className="spacer" />
+
+            <div className="card" style={{ border: "1px solid var(--line)" }}>
+              <div className="toolbar" style={{ borderBottom: "1px solid var(--line)" }}>
+                <div style={{ fontWeight: 900 }}>Detalle de transportes</div>
+                <div className="muted">Tabla completa con scroll horizontal</div>
+              </div>
+
+              <div style={{ overflowX: "auto" }}>
+                <table className="table" style={{ minWidth: 1700 }}>
+                  <thead>
+                    <tr>
+                      <th>TRANSPORTE</th>
+                      <th>EMPRESA</th>
+                      <th>MATERIAL</th>
+                      <th>CUBOS</th>
+                      <th>FECHA</th>
+                      <th>PRECIO</th>
+                      <th>NETO</th>
+                      <th>FLETE</th>
+                      <th>TOTAL</th>
+                      <th>REPORT</th>
+                      <th>CHOFER</th>
+                      <th>PATENTE</th>
+                      <th>POZO/PAGO</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resumenSemana.rows.length === 0 ? (
+                      <tr>
+                        <td colSpan={13} className="muted" style={{ padding: 14 }}>
+                          No hay datos en este rango.
+                        </td>
+                      </tr>
+                    ) : (
+                      resumenSemana.rows.map((r, idx) => (
+                        <tr key={`${r.report}-${idx}`}>
+                          <td>{r.transporte}</td>
+                          <td style={{ fontWeight: 900 }}>{r.empresa}</td>
+                          <td>{r.material}</td>
+                          <td style={{ fontWeight: 900 }}>{formatNumber(r.cubos, 2)}</td>
+                          <td>{r.fecha}</td>
+                          <td>{formatCLP(r.precio)}</td>
+                          <td style={{ fontWeight: 900 }}>{formatCLP(r.neto)}</td>
+                          <td style={{ fontWeight: 900 }}>{formatCLP(r.flete)}</td>
+                          <td style={{ fontWeight: 900 }}>{formatCLP(r.total)}</td>
+                          <td>{r.report}</td>
+                          <td>{r.chofer}</td>
+                          <td>{r.patente}</td>
+                          <td>{r.pozoPago}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1348,90 +1141,12 @@ function buildCamionesChoferes(guias: GuiaRow[], items: ItemRow[]) {
 
   const totalM3 = items.reduce((s, it) => s + safeNum(it.cantidad_m3), 0);
   const totalGuias = guias.length;
-  const promM3Viaje = totalGuias > 0 ? totalM3 / totalGuias : 0;
 
-  type CamAgg = { patente: string; m3: number; viajes: number; choferCounts: Map<string, number> };
-  const byPatente = new Map<string, CamAgg>();
-
-  for (const g of guias) {
-    const pat = normPatente(g.patente);
-    if (!pat) continue;
-
-    if (!byPatente.has(pat)) {
-      byPatente.set(pat, { patente: pat, m3: 0, viajes: 0, choferCounts: new Map() });
-    }
-    byPatente.get(pat)!.viajes += 1;
-
-    const ch = normName(g.chofer);
-    if (ch) {
-      byPatente
-        .get(pat)!
-        .choferCounts.set(ch, (byPatente.get(pat)!.choferCounts.get(ch) ?? 0) + 1);
-    }
-  }
-
-  for (const it of items) {
-    const g = guiaMap.get(it.guia_id);
-    if (!g) continue;
-    const pat = normPatente(g.patente);
-    if (!pat || !byPatente.has(pat)) continue;
-    byPatente.get(pat)!.m3 += safeNum(it.cantidad_m3);
-  }
-
-  const rankingCamiones = Array.from(byPatente.values())
-    .map((c) => {
-      let choferPrincipal = "-";
-      let best = 0;
-      for (const [k, v] of c.choferCounts.entries()) {
-        if (v > best) {
-          best = v;
-          choferPrincipal = k;
-        }
-      }
-      return {
-        patente: c.patente,
-        choferPrincipal,
-        viajes: c.viajes,
-        m3: c.m3,
-        prom: c.viajes > 0 ? c.m3 / c.viajes : 0,
-      };
-    })
-    .sort((a, b) => b.m3 - a.m3);
-
-  type ChoAgg = { chofer: string; viajes: number; m3: number };
-  const byChofer = new Map<string, ChoAgg>();
-
-  for (const g of guias) {
-    const ch = normName(g.chofer);
-    if (!ch) continue;
-    if (!byChofer.has(ch)) byChofer.set(ch, { chofer: ch, viajes: 0, m3: 0 });
-    byChofer.get(ch)!.viajes += 1;
-  }
-
-  for (const it of items) {
-    const g = guiaMap.get(it.guia_id);
-    if (!g) continue;
-    const ch = normName(g.chofer);
-    if (!ch || !byChofer.has(ch)) continue;
-    byChofer.get(ch)!.m3 += safeNum(it.cantidad_m3);
-  }
-
-  const rankingChoferes = Array.from(byChofer.values())
-    .map((c) => ({
-      chofer: c.chofer,
-      viajes: c.viajes,
-      m3: c.m3,
-      prom: c.viajes > 0 ? c.m3 / c.viajes : 0,
-    }))
-    .sort((a, b) => b.viajes - a.viajes);
-
-  return { totalM3, totalGuias, promM3Viaje, rankingCamiones, rankingChoferes };
+  return { totalM3, totalGuias };
 }
 
 function buildArigravResumen(guias: GuiaRow[], items: ItemRow[]) {
-  const guiasArigrav = guias.filter(
-    (g) => getTransporteName(g).trim().toUpperCase() === "ARIGRAV"
-  );
+  const guiasArigrav = guias.filter((g) => getTransporteName(g).trim().toUpperCase() === "ARIGRAV");
 
   const detalleMap = new Map<string, ArigravDetalleRow>();
 
@@ -1516,7 +1231,7 @@ function buildFletesResumen(guias: GuiaRow[], items: ItemRow[]) {
       m3: 0,
       valorFlete,
       totalMaterial: 0,
-      totalGuia: 0,
+      totalGanancia: 0,
     });
   }
 
@@ -1529,7 +1244,7 @@ function buildFletesResumen(guias: GuiaRow[], items: ItemRow[]) {
 
     row.m3 += m3;
     row.totalMaterial += m3 * precio;
-    row.totalGuia = row.totalMaterial + row.valorFlete;
+    row.totalGanancia = row.totalMaterial - row.valorFlete;
   }
 
   const detalle = Array.from(detalleMap.values()).sort((a, b) => {
@@ -1554,14 +1269,12 @@ function buildFletesResumen(guias: GuiaRow[], items: ItemRow[]) {
         viajes: 0,
         m3: 0,
         totalFletes: 0,
-        promFleteViaje: 0,
       });
     }
     const aggT = transporteMap.get(keyT)!;
     aggT.viajes += 1;
     aggT.m3 += safeNum(r.m3);
     aggT.totalFletes += safeNum(r.valorFlete);
-    aggT.promFleteViaje = aggT.viajes > 0 ? aggT.totalFletes / aggT.viajes : 0;
 
     const keyC = (r.chofer || "SIN CHOFER").trim().toUpperCase();
     if (!choferMap.has(keyC)) {
@@ -1570,23 +1283,17 @@ function buildFletesResumen(guias: GuiaRow[], items: ItemRow[]) {
         viajes: 0,
         m3: 0,
         totalFletes: 0,
-        promFleteViaje: 0,
       });
     }
     const aggC = choferMap.get(keyC)!;
     aggC.viajes += 1;
     aggC.m3 += safeNum(r.m3);
     aggC.totalFletes += safeNum(r.valorFlete);
-    aggC.promFleteViaje = aggC.viajes > 0 ? aggC.totalFletes / aggC.viajes : 0;
   }
 
-  const resumenTransporte = Array.from(transporteMap.values()).sort(
-    (a, b) => b.totalFletes - a.totalFletes
-  );
+  const resumenTransporte = Array.from(transporteMap.values()).sort((a, b) => b.totalFletes - a.totalFletes);
 
-  const resumenChofer = Array.from(choferMap.values()).sort(
-    (a, b) => b.totalFletes - a.totalFletes
-  );
+  const resumenChofer = Array.from(choferMap.values()).sort((a, b) => b.totalFletes - a.totalFletes);
 
   return {
     detalle,
@@ -1616,87 +1323,10 @@ function CamionesTab({
     <div className="card" style={{ marginTop: 14 }}>
       <div className="section">
         <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Camiones / Choferes</h2>
-        <div className="muted" style={{ marginTop: 6 }}>
-          Ranking por m³ y eficiencia por viaje (desde guías, sin planillas).
-        </div>
 
         <div className="kpiGrid" style={{ marginTop: 16 }}>
           <KPI label="Total m³ transportados" value={formatNumber(data.totalM3, 2)} />
           <KPI label="Total guías (rango)" value={String(data.totalGuias)} />
-          <KPI label="Promedio m³ / viaje" value={formatNumber(data.promM3Viaje, 2)} />
-        </div>
-
-        <div className="spacer" />
-
-        <div className="grid2">
-          <div className="cardInner">
-            <div className="cardTitle">Ranking de camiones por m³</div>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Patente</th>
-                  <th>Chofer (principal)</th>
-                  <th style={{ textAlign: "right" }}>Viajes</th>
-                  <th style={{ textAlign: "right" }}>m³</th>
-                  <th style={{ textAlign: "right" }}>Prom</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.rankingCamiones.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="muted" style={{ padding: 14 }}>
-                      Sin datos.
-                    </td>
-                  </tr>
-                ) : (
-                  data.rankingCamiones.map((r) => (
-                    <tr key={r.patente}>
-                      <td style={{ fontWeight: 900 }}>{r.patente}</td>
-                      <td style={{ fontWeight: 900 }}>{r.choferPrincipal}</td>
-                      <td style={{ textAlign: "right" }}>{r.viajes}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
-                      <td style={{ textAlign: "right" }}>{formatNumber(r.prom, 2)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="cardInner">
-            <div className="cardTitle">Ranking de choferes por viajes</div>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Chofer</th>
-                  <th style={{ textAlign: "right" }}>Viajes</th>
-                  <th style={{ textAlign: "right" }}>m³</th>
-                  <th style={{ textAlign: "right" }}>Prom</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.rankingChoferes.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="muted" style={{ padding: 14 }}>
-                      Sin datos.
-                    </td>
-                  </tr>
-                ) : (
-                  data.rankingChoferes.map((r) => (
-                    <tr key={r.chofer}>
-                      <td style={{ fontWeight: 900 }}>{r.chofer}</td>
-                      <td style={{ textAlign: "right" }}>{r.viajes}</td>
-                      <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
-                      <td style={{ textAlign: "right" }}>{formatNumber(r.prom, 2)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-
-            <div className="spacer" />
-            <div className="muted">Nota: normalizamos chofer/patente en mayúscula para evitar duplicados.</div>
-          </div>
         </div>
 
         <div className="spacer" />
@@ -1716,9 +1346,7 @@ function CamionesTab({
               <div className="cardTitle" style={{ marginBottom: 4 }}>
                 Resumen Transporte Arigrav
               </div>
-              <div className="muted">
-                Detalle de viajes Arigrav y resumen consolidado por chofer.
-              </div>
+              <div className="muted">Detalle de viajes Arigrav y resumen consolidado por chofer.</div>
             </div>
 
             <a
@@ -1826,9 +1454,7 @@ function CamionesTab({
               <div className="cardTitle" style={{ marginBottom: 4 }}>
                 Resumen de Fletes
               </div>
-              <div className="muted">
-                Detalle de fletes por guía y resumen agrupado por transporte y chofer.
-              </div>
+              <div className="muted">Detalle de fletes por guía y resumen agrupado por transporte y chofer.</div>
             </div>
 
             <a
@@ -1863,7 +1489,7 @@ function CamionesTab({
                 <th style={{ textAlign: "right" }}>m³</th>
                 <th style={{ textAlign: "right" }}>Valor flete</th>
                 <th style={{ textAlign: "right" }}>Total material</th>
-                <th style={{ textAlign: "right" }}>Total guía</th>
+                <th style={{ textAlign: "right" }}>Total ganancia</th>
               </tr>
             </thead>
             <tbody>
@@ -1887,7 +1513,7 @@ function CamionesTab({
                     <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
                     <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.valorFlete)}</td>
                     <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalMaterial)}</td>
-                    <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.totalGuia)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.totalGanancia)}</td>
                   </tr>
                 ))
               )}
@@ -1906,13 +1532,12 @@ function CamionesTab({
                     <th style={{ textAlign: "right" }}>Viajes</th>
                     <th style={{ textAlign: "right" }}>m³</th>
                     <th style={{ textAlign: "right" }}>Total fletes</th>
-                    <th style={{ textAlign: "right" }}>Prom. flete / viaje</th>
                   </tr>
                 </thead>
                 <tbody>
                   {fletes.resumenTransporte.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="muted" style={{ padding: 14 }}>
+                      <td colSpan={4} className="muted" style={{ padding: 14 }}>
                         Sin resumen por transporte.
                       </td>
                     </tr>
@@ -1923,7 +1548,6 @@ function CamionesTab({
                         <td style={{ textAlign: "right" }}>{r.viajes}</td>
                         <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
                         <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalFletes)}</td>
-                        <td style={{ textAlign: "right" }}>{formatCLP(r.promFleteViaje)}</td>
                       </tr>
                     ))
                   )}
@@ -1940,13 +1564,12 @@ function CamionesTab({
                     <th style={{ textAlign: "right" }}>Viajes</th>
                     <th style={{ textAlign: "right" }}>m³</th>
                     <th style={{ textAlign: "right" }}>Total fletes</th>
-                    <th style={{ textAlign: "right" }}>Prom. flete / viaje</th>
                   </tr>
                 </thead>
                 <tbody>
                   {fletes.resumenChofer.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="muted" style={{ padding: 14 }}>
+                      <td colSpan={4} className="muted" style={{ padding: 14 }}>
                         Sin resumen por chofer.
                       </td>
                     </tr>
@@ -1957,7 +1580,6 @@ function CamionesTab({
                         <td style={{ textAlign: "right" }}>{r.viajes}</td>
                         <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
                         <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalFletes)}</td>
-                        <td style={{ textAlign: "right" }}>{formatCLP(r.promFleteViaje)}</td>
                       </tr>
                     ))
                   )}
@@ -1986,7 +1608,7 @@ function buildProductos(guias: GuiaRow[], items: ItemRow[], productosMap: Map<st
 
   for (const it of items) {
     const pid = it.producto_id ?? "";
-    const nombre = pid ? (productosMap.get(pid) ?? "(producto)") : "(producto)";
+    const nombre = pid ? productosMap.get(pid) ?? "(producto)" : "(producto)";
     const key = `${pid}:${nombre}`;
 
     if (!byProd.has(key)) {
@@ -2268,287 +1890,6 @@ function ClientesTab({
 }
 
 /* ======================
-   TAB 7: COBRANZA (AGING)
-   ====================== */
-function buildCobranzaAging(guias: GuiaRow[], items: ItemRow[]) {
-  const guiaMap = new Map<string, GuiaRow>();
-  for (const g of guias) guiaMap.set(g.id, g);
-
-  type BucketAgg = { deuda: number; guias: Set<string>; clientes: Set<string> };
-  const buckets = new Map<AgingBucketKey, BucketAgg>([
-    ["0_7", { deuda: 0, guias: new Set(), clientes: new Set() }],
-    ["8_15", { deuda: 0, guias: new Set(), clientes: new Set() }],
-    ["16_30", { deuda: 0, guias: new Set(), clientes: new Set() }],
-    ["31_plus", { deuda: 0, guias: new Set(), clientes: new Set() }],
-    ["sin_fecha", { deuda: 0, guias: new Set(), clientes: new Set() }],
-  ]);
-
-  type CliAgg = {
-    cliente: string;
-    deudaTotal: number;
-    guias: Set<string>;
-    b0_7: number;
-    b8_15: number;
-    b16_30: number;
-    b31: number;
-    bSF: number;
-  };
-
-  const byCliente = new Map<string, CliAgg>();
-
-  let totalDeuda = 0;
-  let totalGuiasPendientes = 0;
-
-  for (const g of guias) {
-    if (String(g.estado_facturacion ?? "").toUpperCase() === "PENDIENTE") totalGuiasPendientes += 1;
-  }
-
-  for (const it of items) {
-    const g = guiaMap.get(it.guia_id);
-    if (!g) continue;
-
-    const est = String(g.estado_facturacion ?? "").toUpperCase();
-    if (est !== "PENDIENTE") continue;
-
-    const cliente = getClientName(g);
-    const subtotal = safeNum(it.cantidad_m3) * safeNum(it.precio_m3);
-    const b = getBucketFromGuiaFecha(g.fecha);
-
-    const aggB = buckets.get(b)!;
-    aggB.deuda += subtotal;
-    aggB.guias.add(g.id);
-    aggB.clientes.add(cliente);
-
-    if (!byCliente.has(cliente)) {
-      byCliente.set(cliente, {
-        cliente,
-        deudaTotal: 0,
-        guias: new Set(),
-        b0_7: 0,
-        b8_15: 0,
-        b16_30: 0,
-        b31: 0,
-        bSF: 0,
-      });
-    }
-    const c = byCliente.get(cliente)!;
-    c.deudaTotal += subtotal;
-    c.guias.add(g.id);
-
-    if (b === "0_7") c.b0_7 += subtotal;
-    else if (b === "8_15") c.b8_15 += subtotal;
-    else if (b === "16_30") c.b16_30 += subtotal;
-    else if (b === "31_plus") c.b31 += subtotal;
-    else c.bSF += subtotal;
-
-    totalDeuda += subtotal;
-  }
-
-  const bucketRows = (["0_7", "8_15", "16_30", "31_plus", "sin_fecha"] as AgingBucketKey[]).map(
-    (k) => {
-      const v = buckets.get(k)!;
-      return {
-        key: k,
-        label: bucketLabel(k),
-        deuda: v.deuda,
-        guias: v.guias.size,
-        clientes: v.clientes.size,
-        pct: totalDeuda > 0 ? (v.deuda / totalDeuda) * 100 : 0,
-      };
-    }
-  );
-
-  const clientesRows = Array.from(byCliente.values())
-    .map((c) => ({
-      cliente: c.cliente,
-      deudaTotal: c.deudaTotal,
-      guias: c.guias.size,
-      b0_7: c.b0_7,
-      b8_15: c.b8_15,
-      b16_30: c.b16_30,
-      b31: c.b31,
-      bSF: c.bSF,
-    }))
-    .sort((a, b) => b.deudaTotal - a.deudaTotal);
-
-  const clientesConDeuda = clientesRows.length;
-  const promDeudaCliente = clientesConDeuda > 0 ? totalDeuda / clientesConDeuda : 0;
-
-  return {
-    totalDeuda,
-    totalGuiasPendientes,
-    clientesConDeuda,
-    promDeudaCliente,
-    bucketRows,
-    clientesRows: clientesRows.slice(0, 25),
-  };
-}
-
-function CobranzaTab({
-  desde,
-  hasta,
-  data,
-}: {
-  desde: string;
-  hasta: string;
-  data: ReturnType<typeof buildCobranzaAging>;
-}) {
-  const maxDeuda = Math.max(1, ...data.bucketRows.map((x) => x.deuda));
-
-  return (
-    <div className="card" style={{ marginTop: 14 }}>
-      <div className="section">
-        <h2 style={{ margin: 0, fontSize: 34, fontWeight: 900 }}>Cobranza (Aging)</h2>
-        <div className="muted" style={{ marginTop: 6 }}>
-          Solo guías con estado <strong>PENDIENTE</strong>. Aging por fecha de la guía:
-          <strong> 0–7</strong>, <strong>8–15</strong>, <strong>16–30</strong>, <strong>+30</strong>.
-        </div>
-
-        <div className="muted" style={{ marginTop: 6 }}>
-          Mostrando desde <strong>{desde}</strong> hasta <strong>{hasta}</strong>
-        </div>
-
-        <div className="kpiGrid" style={{ marginTop: 16 }}>
-          <KPI label="Deuda total (pendiente)" value={formatCLP(data.totalDeuda)} />
-          <KPI label="Guías pendientes" value={String(data.totalGuiasPendientes)} />
-          <KPI label="Clientes con deuda" value={String(data.clientesConDeuda)} />
-          <KPI label="Prom. deuda / cliente" value={formatCLP(data.promDeudaCliente)} />
-          <KPI label="Desde" value={desde} />
-          <KPI label="Hasta" value={hasta} />
-        </div>
-
-        <div className="spacer" />
-
-        <div className="grid2">
-          <div className="cardInner">
-            <div className="cardTitle">Aging de deuda (resumen)</div>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Tramo</th>
-                  <th style={{ width: 220 }}>Deuda</th>
-                  <th style={{ textAlign: "right" }}>Guías</th>
-                  <th style={{ textAlign: "right" }}>Clientes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.bucketRows.map((r) => (
-                  <tr key={r.key}>
-                    <td style={{ fontWeight: 900 }}>{r.label}</td>
-                    <td>
-                      <div style={{ display: "grid", gap: 6 }}>
-                        <div style={{ fontWeight: 900 }}>{formatCLP(r.deuda)}</div>
-                        <Bar pct={(r.deuda / maxDeuda) * 100} />
-                        <div className="muted" style={{ fontSize: 12 }}>
-                          {formatNumber(r.pct, 1)}% del total
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ textAlign: "right" }}>{r.guias}</td>
-                    <td style={{ textAlign: "right" }}>{r.clientes}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="spacer" />
-            <div className="muted">Nota: “Sin fecha” aparece si alguna guía no tiene fecha guardada.</div>
-          </div>
-
-          <div className="cardInner">
-            <div className="cardTitle">Top 25 clientes por deuda (con aging)</div>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Cliente</th>
-                  <th style={{ textAlign: "right" }}>Total</th>
-                  <th style={{ textAlign: "right" }}>Guías</th>
-                  <th style={{ textAlign: "right" }}>0–7</th>
-                  <th style={{ textAlign: "right" }}>8–15</th>
-                  <th style={{ textAlign: "right" }}>16–30</th>
-                  <th style={{ textAlign: "right" }}>+30</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.clientesRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="muted" style={{ padding: 14 }}>
-                      No hay deuda pendiente en este rango.
-                    </td>
-                  </tr>
-                ) : (
-                  data.clientesRows.map((c) => (
-                    <tr key={c.cliente}>
-                      <td style={{ fontWeight: 900 }}>{c.cliente}</td>
-                      <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(c.deudaTotal)}</td>
-                      <td style={{ textAlign: "right" }}>{c.guias}</td>
-                      <td style={{ textAlign: "right" }}>{formatCLP(c.b0_7)}</td>
-                      <td style={{ textAlign: "right" }}>{formatCLP(c.b8_15)}</td>
-                      <td style={{ textAlign: "right" }}>{formatCLP(c.b16_30)}</td>
-                      <td style={{ textAlign: "right" }}>{formatCLP(c.b31)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-
-            <div className="spacer" />
-            <div className="row">
-              <Link className="btn" href={`/guias?desde=${desde}&hasta=${hasta}`}>
-                Ver guías del rango
-              </Link>
-              <Link className="btn" href={`/reportes?tab=facturacion&desde=${desde}&hasta=${hasta}`}>
-                Ir a Facturación
-              </Link>
-              <Link className="btn btnPrimary" href="/guias/nueva">
-                + Nueva guía
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ======================
-   DETALLE SEMANA
-   ====================== */
-function buildDetalleTransportes(
-  guias: GuiaRow[],
-  items: ItemRow[],
-  productosMap: Map<string, string>
-): DetalleTransporteRow[] {
-  const guiaMap = new Map<string, GuiaRow>();
-  for (const g of guias) guiaMap.set(g.id, g);
-
-  const rows: DetalleTransporteRow[] = [];
-
-  for (const it of items) {
-    const g = guiaMap.get(it.guia_id);
-    if (!g) continue;
-
-    rows.push({
-      transporte: getTransporteName(g),
-      cliente: getClientName(g),
-      producto: productosMap.get(it.producto_id ?? "") ?? "-",
-      m3: safeNum(it.cantidad_m3),
-      fecha: g.fecha ?? "-",
-      valorFlete: safeNum(g.valor_flete),
-      numeroGuia: g.numero ?? "-",
-      chofer: g.chofer ?? "-",
-      patente: g.patente ?? "-",
-      medioPago: medioPagoLabel(g.medio_pago),
-      faena: g.faena ?? "-",
-    });
-  }
-
-  return rows.sort((a, b) => {
-    if (a.fecha === b.fecha) return String(a.numeroGuia).localeCompare(String(b.numeroGuia));
-    return a.fecha.localeCompare(b.fecha);
-  });
-}
-
-/* ======================
    MAIN
    ====================== */
 export default async function ReportesPage({
@@ -2558,7 +1899,8 @@ export default async function ReportesPage({
 }) {
   const sp = await searchParams;
 
-  const tab: TabKey = (sp.tab as TabKey) || "dashboard";
+  const allowedTabs: TabKey[] = ["facturacion", "produccion", "camiones", "productos", "clientes"];
+  const tab: TabKey = allowedTabs.includes(sp.tab as TabKey) ? (sp.tab as TabKey) : "facturacion";
 
   const hoy = toISODate(new Date());
   const desde = sp.desde ?? hoy;
@@ -2593,16 +1935,14 @@ export default async function ReportesPage({
     );
   }
 
-  const dashboard = buildDashboard(guias, items, productosMap);
   const facturacion = buildFacturacion(guias, items, productosMap);
   const produccion = buildProduccionPorDia(guias, items);
+  const resumenSemana = buildResumenSemana(guias, items, productosMap);
   const camiones = buildCamionesChoferes(guias, items);
-  const detalleTransportes = buildDetalleTransportes(guias, items, productosMap);
   const arigrav = buildArigravResumen(guias, items);
   const fletes = buildFletesResumen(guias, items);
   const productos = buildProductos(guias, items, productosMap);
   const clientes = buildClientes(guias, items, productosMap);
-  const cobranza = buildCobranzaAging(guias, items);
 
   return (
     <div className="container">
@@ -2611,28 +1951,15 @@ export default async function ReportesPage({
       <Tabs tab={tab} desde={desde} hasta={hasta} />
       <RangeBox tab={tab} desde={desde} hasta={hasta} />
 
-      {tab === "dashboard" && (
-        <DashboardTab
-          desde={desde}
-          hasta={hasta}
-          data={dashboard}
-          detalleRows={detalleTransportes}
-        />
-      )}
       {tab === "facturacion" && <FacturacionTab desde={desde} hasta={hasta} data={facturacion} />}
-      {tab === "produccion" && <ProduccionTab desde={desde} hasta={hasta} data={produccion} />}
+      {tab === "produccion" && (
+        <ProduccionTab desde={desde} hasta={hasta} data={produccion} resumenSemana={resumenSemana} />
+      )}
       {tab === "camiones" && (
-        <CamionesTab
-          data={camiones}
-          desde={desde}
-          hasta={hasta}
-          arigrav={arigrav}
-          fletes={fletes}
-        />
+        <CamionesTab data={camiones} desde={desde} hasta={hasta} arigrav={arigrav} fletes={fletes} />
       )}
       {tab === "productos" && <ProductosTab desde={desde} hasta={hasta} data={productos} />}
       {tab === "clientes" && <ClientesTab desde={desde} hasta={hasta} data={clientes} />}
-      {tab === "cobranza" && <CobranzaTab desde={desde} hasta={hasta} data={cobranza} />}
     </div>
   );
 }

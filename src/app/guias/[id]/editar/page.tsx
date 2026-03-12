@@ -41,8 +41,8 @@ type ItemDraft = {
 
 const MEDIOS_PAGO = [
   { value: "CREDITO", label: "Crédito" },
-  { value: "BANCO_CHILE", label: "Banco de Chile" },
-  { value: "BANCO_ESTADO", label: "Banco Estado" },
+  { value: "BANCO_CHILE", label: "Pagado Banco de Chile" },
+  { value: "BANCO_ESTADO", label: "Pagado Banco Estado" },
   { value: "EFECTIVO", label: "Efectivo" },
 ] as const;
 

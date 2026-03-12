@@ -20,6 +20,7 @@ type ItemRow = {
   guia_id: string;
   producto_id: string | null;
   cantidad_m3: number | null;
+  precio_m3: number | null;
 };
 
 type ProductoRow = {
@@ -48,6 +49,15 @@ function getClientName(g: GuiaRow) {
 
 function getTransporteName(g: GuiaRow) {
   return g.transportes?.nombre ?? "ARIGRAV";
+}
+
+function pozoPagoLabel(g: GuiaRow) {
+  const faena = (g.faena ?? "").trim();
+  const pago = medioPagoLabel(g.medio_pago);
+  if (faena && pago && pago !== "-") return `${faena} / ${pago}`;
+  if (faena) return faena;
+  if (pago && pago !== "-") return pago;
+  return "-";
 }
 
 export async function GET(req: Request) {
@@ -80,7 +90,7 @@ export async function GET(req: Request) {
   if (guiaIds.length > 0) {
     const { data: itemsData, error: itemsError } = await supabase
       .from("guia_items")
-      .select("id, guia_id, producto_id, cantidad_m3")
+      .select("id, guia_id, producto_id, cantidad_m3, precio_m3")
       .in("guia_id", guiaIds);
 
     if (itemsError) {
@@ -113,19 +123,26 @@ export async function GET(req: Request) {
 
   const rows = items.map((it) => {
     const g = guiaMap.get(it.guia_id);
+    const cubos = safeNum(it.cantidad_m3);
+    const precio = safeNum(it.precio_m3);
+    const neto = cubos * precio;
+    const flete = g ? safeNum(g.valor_flete) : 0;
+    const total = neto - flete;
 
     return {
       TRANSPORTE: g ? getTransporteName(g) : "",
-      EMPRESA_CLIENTE: g ? getClientName(g) : "",
-      MATERIAL_PRODUCTO: productosMap.get(it.producto_id ?? "") ?? "",
-      M3: safeNum(it.cantidad_m3),
+      EMPRESA: g ? getClientName(g) : "",
+      MATERIAL: productosMap.get(it.producto_id ?? "") ?? "",
+      CUBOS: cubos,
       FECHA: g?.fecha ?? "",
-      VALOR_FLETE: g ? safeNum(g.valor_flete) : 0,
-      NUMERO_GUIA: g?.numero ?? "",
+      PRECIO: precio,
+      NETO: neto,
+      FLETE: flete,
+      TOTAL: total,
+      REPORT: g?.numero ?? "",
       CHOFER: g?.chofer ?? "",
       PATENTE: g?.patente ?? "",
-      METODO_PAGO: medioPagoLabel(g?.medio_pago ?? null),
-      FAENA: g?.faena ?? "",
+      "POZO/PAGO": g ? pozoPagoLabel(g) : "-",
     };
   });
 
@@ -137,15 +154,17 @@ export async function GET(req: Request) {
   ws["!cols"] = [
     { wch: 18 },
     { wch: 28 },
+    { wch: 28 },
+    { wch: 12 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 16 },
+    { wch: 14 },
+    { wch: 16 },
+    { wch: 12 },
     { wch: 24 },
-    { wch: 10 },
     { wch: 14 },
-    { wch: 14 },
-    { wch: 14 },
-    { wch: 22 },
-    { wch: 14 },
-    { wch: 18 },
-    { wch: 20 },
+    { wch: 32 },
   ];
 
   const buffer = XLSX.write(wb, {

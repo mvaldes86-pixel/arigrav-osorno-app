@@ -1,1 +1,1 @@
-﻿export type MedioPago = "BANCO_CHILE" | "BANCO_ESTADO" | "EFECTIVO";
+﻿export type MedioPago = "BANCO_CHILE" | "BANCO_ESTADO" | "EFECTIVO" | "CREDITO";
