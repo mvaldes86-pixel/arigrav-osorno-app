@@ -15,6 +15,7 @@ type GuiaRow = {
   transporte_id: string | null;
   valor_flete: number | null;
   faena: string | null;
+  orden_compra: string | null;
   chofer: string | null;
   patente: string | null;
   medio_pago: string | null;
@@ -253,6 +254,7 @@ export default function EditarGuiaPage() {
   const [transporteId, setTransporteId] = useState("");
   const [valorFlete, setValorFlete] = useState("");
   const [faena, setFaena] = useState("");
+  const [ordenCompra, setOrdenCompra] = useState("");
   const [chofer, setChofer] = useState("");
   const [patente, setPatente] = useState("");
   const [medioPago, setMedioPago] = useState("CREDITO");
@@ -292,6 +294,7 @@ export default function EditarGuiaPage() {
       setTransporteId(guia.transporte_id ?? "");
       setValorFlete(String(guia.valor_flete ?? ""));
       setFaena(guia.faena ?? "");
+      setOrdenCompra(guia.orden_compra ?? "");
       setChofer(guia.chofer ?? "");
       setPatente(guia.patente ?? "");
       setMedioPago(guia.medio_pago ?? "CREDITO");
@@ -357,6 +360,7 @@ export default function EditarGuiaPage() {
         transporte_id: transporteId || null,
         valor_flete: Number(toNumberSafe(valorFlete).toFixed(2)),
         faena: normalizeText(faena),
+        orden_compra: normalizeText(ordenCompra),
         chofer: normalizeText(chofer),
         patente: normalizeText(patente).toUpperCase(),
         medio_pago: medioPago,
@@ -502,17 +506,29 @@ export default function EditarGuiaPage() {
             </div>
 
             <div style={styles.field}>
-              <div style={styles.label}>Chofer</div>
-              <input style={styles.input} value={chofer} onChange={(e) => setChofer(e.target.value)} />
+              <div style={styles.label}>Orden de Compra (OC)</div>
+              <input
+                style={styles.input}
+                placeholder="Ej: OC-10234"
+                value={ordenCompra}
+                onChange={(e) => setOrdenCompra(e.target.value)}
+              />
             </div>
           </div>
 
-          <div style={{ ...styles.grid3, marginTop: 14 }}>
+          <div style={{ ...styles.grid2, marginTop: 14 }}>
+            <div style={styles.field}>
+              <div style={styles.label}>Chofer</div>
+              <input style={styles.input} value={chofer} onChange={(e) => setChofer(e.target.value)} />
+            </div>
+
             <div style={styles.field}>
               <div style={styles.label}>Patente</div>
               <input style={styles.input} value={patente} onChange={(e) => setPatente(e.target.value)} />
             </div>
+          </div>
 
+          <div style={{ ...styles.grid3, marginTop: 14 }}>
             <div style={styles.field}>
               <div style={styles.label}>Tipo operación</div>
               <select style={styles.select} value={tipoOperacion} onChange={(e) => setTipoOperacion(e.target.value)}>
@@ -534,9 +550,7 @@ export default function EditarGuiaPage() {
                 ))}
               </select>
             </div>
-          </div>
 
-          <div style={{ ...styles.grid2, marginTop: 14 }}>
             <div style={styles.field}>
               <div style={styles.label}>Estado facturación</div>
               <select
@@ -551,7 +565,9 @@ export default function EditarGuiaPage() {
                 ))}
               </select>
             </div>
+          </div>
 
+          <div style={{ ...styles.grid2, marginTop: 14 }}>
             <div style={styles.field}>
               <div style={styles.label}>Total actual</div>
               <input style={styles.input} value={formatCLP(total)} readOnly />
