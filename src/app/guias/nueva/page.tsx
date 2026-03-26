@@ -250,8 +250,8 @@ export default function NuevaGuiaPage() {
   const [transporteManual, setTransporteManual] = useState<string>("");
 
   const [valorFlete, setValorFlete] = useState<string>("");
-
   const [faena, setFaena] = useState("");
+  const [ordenCompra, setOrdenCompra] = useState("");
   const [chofer, setChofer] = useState("");
   const [patente, setPatente] = useState("");
 
@@ -319,7 +319,10 @@ export default function NuevaGuiaPage() {
   }, [items]);
 
   const onAddItem = () => {
-    setItems((prev) => [...prev, { producto_id: "", cantidad_m3: "", precio_m3: "" }]);
+    setItems((prev) => [
+      ...prev,
+      { producto_id: "", cantidad_m3: "", precio_m3: "" },
+    ]);
   };
 
   const onRemoveItem = (idx: number) => {
@@ -489,6 +492,7 @@ export default function NuevaGuiaPage() {
         transporte_id: finalTransporteId,
         valor_flete: Number(toNumberSafe(valorFlete).toFixed(2)),
         faena: normalizeText(faena),
+        orden_compra: normalizeText(ordenCompra),
         chofer: normalizeText(chofer),
         patente: normalizeText(patente).toUpperCase(),
         medio_pago: medioPago,
@@ -660,6 +664,28 @@ export default function NuevaGuiaPage() {
             </div>
           </div>
 
+          <div style={{ ...styles.grid2, marginTop: 14 }}>
+            <div style={styles.field}>
+              <div style={styles.label}>Orden de Compra (OC)</div>
+              <input
+                style={styles.input}
+                placeholder="Ej: OC-10234"
+                value={ordenCompra}
+                onChange={(e) => setOrdenCompra(e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <div style={styles.label}>Patente</div>
+              <input
+                style={styles.input}
+                placeholder="Ej: AB-CD-12"
+                value={patente}
+                onChange={(e) => setPatente(e.target.value)}
+              />
+            </div>
+          </div>
+
           <div style={{ ...styles.grid3, marginTop: 14 }}>
             <div style={styles.field}>
               <div style={styles.label}>Tipo operación</div>
@@ -719,12 +745,12 @@ export default function NuevaGuiaPage() {
             </div>
 
             <div style={styles.field}>
-              <div style={styles.label}>Patente</div>
+              <div style={styles.label}>Patente camión / vehículo</div>
               <input
-                style={styles.input}
-                placeholder="Ej: AB-CD-12"
-                value={patente}
-                onChange={(e) => setPatente(e.target.value)}
+                style={{ ...styles.input, visibility: "hidden" }}
+                placeholder=""
+                value=""
+                readOnly
               />
             </div>
           </div>
