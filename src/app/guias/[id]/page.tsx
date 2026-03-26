@@ -8,6 +8,7 @@ type Guia = {
   numero: number | null;
   fecha: string | null;
   faena: string | null;
+  orden_compra: string | null;
   chofer: string | null;
   patente: string | null;
   medio_pago: "BANCO_CHILE" | "BANCO_ESTADO" | "EFECTIVO" | "CREDITO" | string | null;
@@ -68,7 +69,7 @@ export default async function GuiaDetallePage({
   const { data: guia, error: guiaErr } = await supabase
     .from("guias")
     .select(
-      "id, numero, fecha, faena, chofer, patente, medio_pago, tipo_operacion, estado_facturacion, sector, total, valor_flete, clientes(nombre), transportes(nombre)"
+      "id, numero, fecha, faena, orden_compra, chofer, patente, medio_pago, tipo_operacion, estado_facturacion, sector, total, valor_flete, clientes(nombre), transportes(nombre)"
     )
     .eq("id", id)
     .single();
@@ -266,6 +267,9 @@ export default async function GuiaDetallePage({
         </p>
         <p>
           <strong>Faena:</strong> {g.faena ?? "-"}
+        </p>
+        <p>
+          <strong>Orden de Compra (OC):</strong> {g.orden_compra ?? "-"}
         </p>
 
         <p>
