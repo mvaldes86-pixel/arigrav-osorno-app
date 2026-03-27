@@ -241,10 +241,6 @@ function pozoPagoLabel(g: GuiaRow) {
   return "-";
 }
 
-function isGuiaActiva(g: GuiaRow) {
-  return String(g.estado_facturacion ?? "").toUpperCase() !== "ANULADA";
-}
-
 /* ======================
    FETCH
    ====================== */
@@ -256,22 +252,33 @@ async function fetchGuiasEnRango(desde: string, hasta: string) {
     )
     .gte("fecha", desde)
     .lte("fecha", hasta)
+    .neq("estado_facturacion", "ANULADA")
     .order("fecha", { ascending: true });
 
   if (error) throw error;
-  return ((data ?? []) as unknown as GuiaRow[]).filter(isGuiaActiva);
+  return (data ?? []) as unknown as GuiaRow[];
 }
 
 async function fetchItemsPorGuias(guiaIds: string[]) {
   if (guiaIds.length === 0) return [] as ItemRow[];
 
-  const { data, error } = await supabase
-    .from("guia_items")
-    .select("id, guia_id, producto_id, cantidad_m3, precio_m3")
-    .in("guia_id", guiaIds);
+  const chunkSize = 200;
+  const allRows: ItemRow[] = [];
 
-  if (error) throw error;
-  return (data ?? []) as ItemRow[];
+  for (let i = 0; i < guiaIds.length; i += chunkSize) {
+    const chunk = guiaIds.slice(i, i + chunkSize);
+
+    const { data, error } = await supabase
+      .from("guia_items")
+      .select("id, guia_id, producto_id, cantidad_m3, precio_m3")
+      .in("guia_id", chunk);
+
+    if (error) throw error;
+
+    allRows.push(...((data ?? []) as ItemRow[]));
+  }
+
+  return allRows;
 }
 
 async function fetchProductosMap(productoIds: string[]) {
@@ -279,15 +286,24 @@ async function fetchProductosMap(productoIds: string[]) {
   const ids = Array.from(new Set(productoIds)).filter(Boolean);
   if (ids.length === 0) return map;
 
-  const { data, error } = await supabase
-    .from("productos")
-    .select("id, nombre")
-    .in("id", ids);
+  const chunkSize = 200;
 
-  if (error) throw error;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
 
-  const rows = (data ?? []) as ProductoRow[];
-  for (const p of rows) map.set(p.id, p.nombre);
+    const { data, error } = await supabase
+      .from("productos")
+      .select("id, nombre")
+      .in("id", chunk);
+
+    if (error) throw error;
+
+    const rows = (data ?? []) as ProductoRow[];
+    for (const p of rows) {
+      map.set(p.id, p.nombre);
+    }
+  }
+
   return map;
 }
 
