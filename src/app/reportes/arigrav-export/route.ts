@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
+import * as XLSX from "xlsx";
 
 type NombreRel = { nombre: string } | { nombre: string }[] | null;
 
@@ -9,14 +9,17 @@ type GuiaRow = {
   numero: number | null;
   fecha: string | null;
   faena: string | null;
+  orden_compra: string | null;
   chofer: string | null;
   patente: string | null;
+  valor_flete: number | null;
+  medio_pago: string | null;
+  estado_facturacion: string | null;
   clientes?: NombreRel;
   transportes?: NombreRel;
 };
 
 type ItemRow = {
-  id: string;
   guia_id: string;
   producto_id: string | null;
   cantidad_m3: number | null;
@@ -33,216 +36,181 @@ function safeNum(v: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function medioPagoLabel(v: string | null) {
+  if (!v) return "";
+  const x = String(v).toUpperCase();
+  if (x === "BANCO_CHILE") return "Banco de Chile";
+  if (x === "BANCO_ESTADO") return "Banco Estado";
+  if (x === "EFECTIVO") return "Efectivo";
+  if (x === "CREDITO") return "Crédito";
+  return v;
+}
+
 function getNombre(rel?: NombreRel): string {
   if (!rel) return "";
   if (Array.isArray(rel)) return rel[0]?.nombre ?? "";
   return rel.nombre ?? "";
 }
 
-function getClientName(g: GuiaRow) {
-  return getNombre(g.clientes);
+function getTransporteName(g: GuiaRow) {
+  return (getNombre(g.transportes) || "ARIGRAV").trim();
 }
 
-function getTransporteName(g: GuiaRow) {
-  return getNombre(g.transportes).trim().toUpperCase();
+async function fetchGuiasEnRango(desde: string, hasta: string) {
+  const { data, error } = await supabase
+    .from("guias")
+    .select(`
+      id,
+      numero,
+      fecha,
+      faena,
+      orden_compra,
+      chofer,
+      patente,
+      valor_flete,
+      medio_pago,
+      estado_facturacion,
+      clientes(nombre),
+      transportes(nombre)
+    `)
+    .gte("fecha", desde)
+    .lte("fecha", hasta)
+    .neq("estado_facturacion", "ANULADA")
+    .order("fecha", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []) as GuiaRow[];
+}
+
+async function fetchItemsPorGuias(guiaIds: string[]) {
+  if (guiaIds.length === 0) return [] as ItemRow[];
+
+  const chunkSize = 200;
+  const allRows: ItemRow[] = [];
+
+  for (let i = 0; i < guiaIds.length; i += chunkSize) {
+    const chunk = guiaIds.slice(i, i + chunkSize);
+
+    const { data, error } = await supabase
+      .from("guia_items")
+      .select(`
+        guia_id,
+        producto_id,
+        cantidad_m3,
+        precio_m3
+      `)
+      .in("guia_id", chunk);
+
+    if (error) throw error;
+
+    allRows.push(...((data ?? []) as ItemRow[]));
+  }
+
+  return allRows;
+}
+
+async function fetchProductosMap(productoIds: string[]) {
+  const ids = Array.from(new Set(productoIds)).filter(Boolean);
+  const map = new Map<string, string>();
+
+  if (ids.length === 0) return map;
+
+  const chunkSize = 200;
+
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+
+    const { data, error } = await supabase
+      .from("productos")
+      .select("id, nombre")
+      .in("id", chunk);
+
+    if (error) throw error;
+
+    for (const p of (data ?? []) as ProductoRow[]) {
+      map.set(p.id, p.nombre);
+    }
+  }
+
+  return map;
 }
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
+  try {
+    const { searchParams } = new URL(req.url);
+    const desde = searchParams.get("desde");
+    const hasta = searchParams.get("hasta");
 
-  const desde = searchParams.get("desde");
-  const hasta = searchParams.get("hasta");
-
-  if (!desde || !hasta) {
-    return NextResponse.json({ error: "Fechas requeridas" }, { status: 400 });
-  }
-
-  const { data: guiasData, error: guiasError } = await supabase
-    .from("guias")
-    .select(
-      "id, numero, fecha, faena, chofer, patente, clientes(nombre), transportes(nombre)"
-    )
-    .gte("fecha", desde)
-    .lte("fecha", hasta)
-    .order("fecha", { ascending: true });
-
-  if (guiasError) {
-    return NextResponse.json({ error: guiasError.message }, { status: 500 });
-  }
-
-  const guias = ((guiasData ?? []) as unknown as GuiaRow[]).filter(
-    (g) => getTransporteName(g) === "ARIGRAV"
-  );
-
-  const guiaIds = guias.map((g) => g.id);
-
-  let items: ItemRow[] = [];
-  if (guiaIds.length > 0) {
-    const { data: itemsData, error: itemsError } = await supabase
-      .from("guia_items")
-      .select("id, guia_id, producto_id, cantidad_m3, precio_m3")
-      .in("guia_id", guiaIds);
-
-    if (itemsError) {
-      return NextResponse.json({ error: itemsError.message }, { status: 500 });
+    if (!desde || !hasta) {
+      return NextResponse.json(
+        { error: "Faltan parámetros desde/hasta" },
+        { status: 400 }
+      );
     }
 
-    items = (itemsData ?? []) as ItemRow[];
-  }
+    const guias = await fetchGuiasEnRango(desde, hasta);
 
-  const productoIds = Array.from(
-    new Set(items.map((it) => it.producto_id).filter(Boolean))
-  ) as string[];
+    const guiasArigrav = guias.filter(
+      (g) => getTransporteName(g).toUpperCase() === "ARIGRAV"
+    );
 
-  const productosMap = new Map<string, string>();
-  if (productoIds.length > 0) {
-    const { data: productosData, error: productosError } = await supabase
-      .from("productos")
-      .select("id, nombre")
-      .in("id", productoIds);
+    const guiaIds = guiasArigrav.map((g) => g.id);
+    const items = await fetchItemsPorGuias(guiaIds);
+    const productosMap = await fetchProductosMap(items.map((it) => it.producto_id ?? ""));
 
-    if (productosError) {
-      return NextResponse.json({ error: productosError.message }, { status: 500 });
-    }
+    const guiaMap = new Map<string, GuiaRow>();
+    for (const g of guiasArigrav) guiaMap.set(g.id, g);
 
-    for (const p of (productosData ?? []) as ProductoRow[]) {
-      productosMap.set(p.id, p.nombre);
-    }
-  }
+    const rows = items.map((it) => {
+      const g = guiaMap.get(it.guia_id);
+      if (!g) return null;
 
-  const detalleMap = new Map<
-    string,
-    {
-      numeroGuia: number | string;
-      faena: string;
-      clienteEmpresa: string;
-      chofer: string;
-      patente: string;
-      m3: number;
-      totalMaterial: number;
-      totalVueltasViajes: number;
-    }
-  >();
+      const m3 = safeNum(it.cantidad_m3);
+      const precio = safeNum(it.precio_m3);
+      const totalMaterial = m3 * precio;
+      const valorFlete = safeNum(g.valor_flete);
+      const totalGanancia = totalMaterial - valorFlete;
 
-  for (const g of guias) {
-    detalleMap.set(g.id, {
-      numeroGuia: g.numero ?? "",
-      faena: g.faena ?? "",
-      clienteEmpresa: getClientName(g),
-      chofer: g.chofer ?? "",
-      patente: g.patente ?? "",
-      m3: 0,
-      totalMaterial: 0,
-      totalVueltasViajes: 1,
+      return {
+        Cliente: getNombre(g.clientes) ?? "",
+        Fecha: g.fecha ?? "",
+        NumeroGuia: g.numero ?? "",
+        Faena: g.faena ?? "",
+        Orden_compra: g.orden_compra ?? "",
+        Transporte: getTransporteName(g),
+        Chofer: g.chofer ?? "",
+        Patente: g.patente ?? "",
+        Producto: productosMap.get(it.producto_id ?? "") ?? "",
+        m3,
+        Precio: precio,
+        Total_material: totalMaterial,
+        Valor_flete: valorFlete,
+        Total_ganancia: totalGanancia,
+        Medio_pago: medioPagoLabel(g.medio_pago),
+        Estado: g.estado_facturacion ?? "",
+      };
+    }).filter(Boolean);
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Arigrav");
+
+    const buffer = XLSX.write(wb, {
+      type: "buffer",
+      bookType: "xlsx",
     });
+
+    return new NextResponse(buffer, {
+      headers: {
+        "Content-Disposition": `attachment; filename=Arigrav_${desde}_${hasta}.xlsx`,
+        "Content-Type":
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      },
+    });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message ?? "Bad Request" },
+      { status: 400 }
+    );
   }
-
-  for (const it of items) {
-    const row = detalleMap.get(it.guia_id);
-    if (!row) continue;
-
-    const m3 = safeNum(it.cantidad_m3);
-    const precio = safeNum(it.precio_m3);
-
-    row.m3 += m3;
-    row.totalMaterial += m3 * precio;
-  }
-
-  const detalleRows = Array.from(detalleMap.values()).sort((a, b) =>
-    String(a.numeroGuia).localeCompare(String(b.numeroGuia), "es", { numeric: true })
-  );
-
-  const resumenChoferMap = new Map<
-    string,
-    {
-      chofer: string;
-      viajes: number;
-      m3: number;
-      totalMaterial: number;
-    }
-  >();
-
-  for (const r of detalleRows) {
-    const key = (r.chofer || "(sin chofer)").trim().toUpperCase();
-
-    if (!resumenChoferMap.has(key)) {
-      resumenChoferMap.set(key, {
-        chofer: r.chofer || "(sin chofer)",
-        viajes: 0,
-        m3: 0,
-        totalMaterial: 0,
-      });
-    }
-
-    const agg = resumenChoferMap.get(key)!;
-    agg.viajes += 1;
-    agg.m3 += safeNum(r.m3);
-    agg.totalMaterial += safeNum(r.totalMaterial);
-  }
-
-  const resumenChoferRows = Array.from(resumenChoferMap.values()).sort((a, b) => {
-    if (b.viajes !== a.viajes) return b.viajes - a.viajes;
-    return b.m3 - a.m3;
-  });
-
-  const wb = XLSX.utils.book_new();
-
-  const wsDetalle = XLSX.utils.json_to_sheet(
-    detalleRows.map((r) => ({
-      NUMERO_GUIA: r.numeroGuia,
-      FAENA: r.faena,
-      CLIENTE_EMPRESA: r.clienteEmpresa,
-      CHOFER: r.chofer,
-      PATENTE: r.patente,
-      M3: r.m3,
-      TOTAL_MATERIAL: r.totalMaterial,
-      TOTAL_VUELTAS_VIAJES: r.totalVueltasViajes,
-    }))
-  );
-
-  wsDetalle["!cols"] = [
-    { wch: 14 },
-    { wch: 24 },
-    { wch: 28 },
-    { wch: 22 },
-    { wch: 14 },
-    { wch: 10 },
-    { wch: 18 },
-    { wch: 22 },
-  ];
-
-  XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle Arigrav");
-
-  const wsResumen = XLSX.utils.json_to_sheet(
-    resumenChoferRows.map((r) => ({
-      CHOFER: r.chofer,
-      TOTAL_VIAJES: r.viajes,
-      TOTAL_M3: r.m3,
-      TOTAL_MATERIAL: r.totalMaterial,
-    }))
-  );
-
-  wsResumen["!cols"] = [
-    { wch: 24 },
-    { wch: 14 },
-    { wch: 12 },
-    { wch: 18 },
-  ];
-
-  XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen Chofer");
-
-  const buffer = XLSX.write(wb, {
-    type: "buffer",
-    bookType: "xlsx",
-  });
-
-  const nombreArchivo = `ARIGRAV_${desde}_AL_${hasta}.xlsx`;
-
-  return new NextResponse(buffer, {
-    headers: {
-      "Content-Type":
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename=${nombreArchivo}`,
-    },
-  });
 }
