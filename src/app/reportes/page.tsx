@@ -16,6 +16,7 @@ type GuiaRow = {
   fecha: string | null;
   faena: string | null;
   cliente_id: string | null;
+  orden_compra: string | null;
   clientes?: NombreRel;
 
   medio_pago:
@@ -60,6 +61,7 @@ type FacturacionDetalleRow = {
   fecha: string;
   numeroGuia: number | string;
   faena: string;
+  ordenCompra: string;
   transporte: string;
   chofer: string;
   patente: string;
@@ -76,6 +78,7 @@ type FacturacionDetalleRow = {
 type FacturacionClienteResumen = {
   cliente: string;
   guias: number;
+  ordenCompra: string;
   m3: number;
   netoMateriales: number;
   totalFletes: number;
@@ -86,6 +89,7 @@ type FacturacionClienteResumen = {
 type FacturacionProductoResumen = {
   cliente: string;
   producto: string;
+  ordenCompra: string;
   m3: number;
   precioPromedio: number;
   neto: number;
@@ -217,6 +221,17 @@ function getTransporteName(g: GuiaRow) {
   return getNombre(g.transportes) || "ARIGRAV";
 }
 
+function getOrdenCompra(g: GuiaRow) {
+  return (g.orden_compra ?? "").trim();
+}
+
+function resumenOC(values: string[]) {
+  const unicas = Array.from(new Set(values.map((v) => v.trim()).filter(Boolean)));
+  if (unicas.length === 0) return "-";
+  if (unicas.length === 1) return unicas[0];
+  return "Varias OC";
+}
+
 function pozoPagoLabel(g: GuiaRow) {
   const faena = (g.faena ?? "").trim();
   const pago = medioPagoLabel(g.medio_pago);
@@ -237,7 +252,7 @@ async function fetchGuiasEnRango(desde: string, hasta: string) {
   const { data, error } = await supabase
     .from("guias")
     .select(
-      "id, numero, fecha, faena, cliente_id, medio_pago, estado_facturacion, chofer, patente, transporte_id, valor_flete, clientes(nombre), transportes(nombre)"
+      "id, numero, fecha, faena, cliente_id, orden_compra, medio_pago, estado_facturacion, chofer, patente, transporte_id, valor_flete, clientes(nombre), transportes(nombre)"
     )
     .gte("fecha", desde)
     .lte("fecha", hasta)
@@ -411,8 +426,14 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
   for (const g of guias) guiaMap.set(g.id, g);
 
   const detalleRows: FacturacionDetalleRow[] = [];
-  const resumenMap = new Map<string, FacturacionClienteResumen & { guiaIds: Set<string> }>();
-  const productosResumenMap = new Map<string, { cliente: string; producto: string; m3: number; neto: number }>();
+  const resumenMap = new Map<
+    string,
+    FacturacionClienteResumen & { guiaIds: Set<string>; ordenesCompra: Set<string> }
+  >();
+  const productosResumenMap = new Map<
+    string,
+    { cliente: string; producto: string; m3: number; neto: number; ordenesCompra: Set<string> }
+  >();
 
   let totalFacturado = 0;
   let totalPendiente = 0;
@@ -435,6 +456,7 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
 
     const cliente = getClientName(g);
     const producto = productosMap.get(it.producto_id ?? "") ?? "(producto)";
+    const ordenCompra = getOrdenCompra(g);
     const m3 = safeNum(it.cantidad_m3);
     const precioM3 = safeNum(it.precio_m3);
     const netoMaterial = m3 * precioM3;
@@ -447,6 +469,7 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
       fecha: g.fecha ?? "-",
       numeroGuia: g.numero ?? "-",
       faena: g.faena ?? "-",
+      ordenCompra: ordenCompra || "-",
       transporte: getTransporteName(g),
       chofer: g.chofer ?? "-",
       patente: g.patente ?? "-",
@@ -464,18 +487,21 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
       resumenMap.set(cliente, {
         cliente,
         guias: 0,
+        ordenCompra: "-",
         m3: 0,
         netoMateriales: 0,
         totalFletes: 0,
         totalGeneral: 0,
         estado: "OK",
         guiaIds: new Set<string>(),
+        ordenesCompra: new Set<string>(),
       });
     }
 
     const resumen = resumenMap.get(cliente)!;
     resumen.m3 += m3;
     resumen.netoMateriales += netoMaterial;
+    if (ordenCompra) resumen.ordenesCompra.add(ordenCompra);
 
     if (!fletesSumados.has(g.id)) {
       resumen.totalFletes += valorFlete;
@@ -486,15 +512,23 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
     resumen.totalGeneral = resumen.netoMateriales - resumen.totalFletes;
     resumen.guiaIds.add(g.id);
     resumen.guias = resumen.guiaIds.size;
+    resumen.ordenCompra = resumenOC(Array.from(resumen.ordenesCompra));
     if (estado !== "PAGADO") resumen.estado = "Pendiente";
 
     const keyProd = `${cliente}__${producto}`;
     if (!productosResumenMap.has(keyProd)) {
-      productosResumenMap.set(keyProd, { cliente, producto, m3: 0, neto: 0 });
+      productosResumenMap.set(keyProd, {
+        cliente,
+        producto,
+        m3: 0,
+        neto: 0,
+        ordenesCompra: new Set<string>(),
+      });
     }
     const prod = productosResumenMap.get(keyProd)!;
     prod.m3 += m3;
     prod.neto += netoMaterial;
+    if (ordenCompra) prod.ordenesCompra.add(ordenCompra);
 
     if (estado === "PAGADO") totalFacturado += netoMaterial;
     else totalPendiente += netoMaterial;
@@ -503,13 +537,17 @@ function buildFacturacion(guias: GuiaRow[], items: ItemRow[], productosMap: Map<
   }
 
   const resumenClientes: FacturacionClienteResumen[] = Array.from(resumenMap.values())
-    .map(({ guiaIds, ...rest }) => rest)
+    .map(({ guiaIds, ordenesCompra, ...rest }) => ({
+      ...rest,
+      ordenCompra: resumenOC(Array.from(ordenesCompra)),
+    }))
     .sort((a, b) => b.totalGeneral - a.totalGeneral);
 
   const resumenProductos: FacturacionProductoResumen[] = Array.from(productosResumenMap.values())
     .map((p) => ({
       cliente: p.cliente,
       producto: p.producto,
+      ordenCompra: resumenOC(Array.from(p.ordenesCompra)),
       m3: p.m3,
       neto: p.neto,
       precioPromedio: p.m3 > 0 ? p.neto / p.m3 : 0,
@@ -612,6 +650,7 @@ function FacturacionTab({
               <tr>
                 <th>Cliente</th>
                 <th style={{ textAlign: "right" }}>Guías</th>
+                <th>OC</th>
                 <th style={{ textAlign: "right" }}>m³</th>
                 <th style={{ textAlign: "right" }}>Neto materiales</th>
                 <th style={{ textAlign: "right" }}>Fletes</th>
@@ -622,7 +661,7 @@ function FacturacionTab({
             <tbody>
               {data.resumenClientes.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="muted" style={{ padding: 14 }}>
+                  <td colSpan={8} className="muted" style={{ padding: 14 }}>
                     No hay datos en este rango.
                   </td>
                 </tr>
@@ -631,6 +670,7 @@ function FacturacionTab({
                   <tr key={r.cliente}>
                     <td style={{ fontWeight: 900 }}>{r.cliente}</td>
                     <td style={{ textAlign: "right" }}>{r.guias}</td>
+                    <td>{r.ordenCompra}</td>
                     <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
                     <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.netoMateriales)}</td>
                     <td style={{ textAlign: "right", fontWeight: 800 }}>{formatCLP(r.totalFletes)}</td>
@@ -654,6 +694,7 @@ function FacturacionTab({
               <tr>
                 <th>Cliente</th>
                 <th>Producto</th>
+                <th>OC</th>
                 <th style={{ textAlign: "right" }}>m³</th>
                 <th style={{ textAlign: "right" }}>Precio</th>
                 <th style={{ textAlign: "right" }}>Neto</th>
@@ -662,7 +703,7 @@ function FacturacionTab({
             <tbody>
               {data.resumenProductos.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="muted" style={{ padding: 14 }}>
+                  <td colSpan={6} className="muted" style={{ padding: 14 }}>
                     No hay datos en este rango.
                   </td>
                 </tr>
@@ -671,6 +712,7 @@ function FacturacionTab({
                   <tr key={`${r.cliente}-${r.producto}-${i}`}>
                     <td style={{ fontWeight: 900 }}>{r.cliente}</td>
                     <td>{r.producto}</td>
+                    <td>{r.ordenCompra}</td>
                     <td style={{ textAlign: "right", fontWeight: 800 }}>{formatNumber(r.m3, 2)}</td>
                     <td style={{ textAlign: "right" }}>{formatCLP(r.precioPromedio)}</td>
                     <td style={{ textAlign: "right", fontWeight: 900 }}>{formatCLP(r.neto)}</td>
@@ -698,7 +740,7 @@ function FacturacionTab({
             <table
               className="table"
               style={{
-                minWidth: 1600,
+                minWidth: 1750,
                 whiteSpace: "nowrap",
               }}
             >
@@ -708,6 +750,7 @@ function FacturacionTab({
                   <th>Fecha</th>
                   <th>N° guía</th>
                   <th>Faena</th>
+                  <th>Orden de Compra</th>
                   <th>Transporte</th>
                   <th>Chofer</th>
                   <th>Patente</th>
@@ -724,7 +767,7 @@ function FacturacionTab({
               <tbody>
                 {data.detalleRows.length === 0 ? (
                   <tr>
-                    <td colSpan={15} className="muted" style={{ padding: 14 }}>
+                    <td colSpan={16} className="muted" style={{ padding: 14 }}>
                       No hay datos en este rango.
                     </td>
                   </tr>
@@ -735,6 +778,7 @@ function FacturacionTab({
                       <td>{r.fecha}</td>
                       <td>{r.numeroGuia}</td>
                       <td>{r.faena}</td>
+                      <td>{r.ordenCompra}</td>
                       <td>{r.transporte}</td>
                       <td>{r.chofer}</td>
                       <td>{r.patente}</td>
