@@ -23,6 +23,7 @@ type GuiaRow = {
   fecha: string | null;
   faena: string | null;
   orden_compra: string | null;
+  guia_despacho_sii: string | null;
   chofer: string | null;
   patente: string | null;
   valor_flete: number | null;
@@ -59,6 +60,7 @@ async function fetchGuiasEnRango(desde: string, hasta: string) {
       fecha,
       faena,
       orden_compra,
+      guia_despacho_sii,
       chofer,
       patente,
       valor_flete,
@@ -162,6 +164,7 @@ export async function GET(req: Request) {
           NumeroGuia: "",
           Faena: "",
           Orden_compra: "",
+          Guia_despacho_SII: "",
           Transporte: "",
           Chofer: "",
           Patente: "",
@@ -188,6 +191,7 @@ export async function GET(req: Request) {
         NumeroGuia: g.numero ?? "",
         Faena: g.faena ?? "",
         Orden_compra: g.orden_compra ?? "",
+        Guia_despacho_SII: g.guia_despacho_sii ?? "",
         Transporte: getNombre(g.transportes) || "ARIGRAV",
         Chofer: g.chofer ?? "",
         Patente: g.patente ?? "",
@@ -208,6 +212,7 @@ export async function GET(req: Request) {
       "NumeroGuia",
       "Faena",
       "Orden_compra",
+      "Guia_despacho_SII",
       "Transporte",
       "Chofer",
       "Patente",

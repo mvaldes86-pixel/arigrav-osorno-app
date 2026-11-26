@@ -12,6 +12,7 @@ type GuiaFromDb = {
   fecha: any;
   faena: any;
   patente: any;
+  guia_despacho_sii: any;
   clientes: ClienteEmbed[] | ClienteEmbed | null;
 };
 
@@ -22,6 +23,7 @@ type Guia = {
   fecha: string | null;
   faena: string | null;
   patente: string | null;
+  guiaDespachoSii: string | null;
   clienteNombre: string;
 };
 
@@ -51,7 +53,7 @@ export default function GuiaDetalleClient({ id }: { id: string }) {
 
         const { data, error } = await supabase
           .from("guias")
-          .select("id, numero, fecha, faena, patente, clientes(nombre)")
+          .select("id, numero, fecha, faena, patente, guia_despacho_sii, clientes(nombre)")
           .eq("id", id)
           .maybeSingle();
 
@@ -72,6 +74,7 @@ export default function GuiaDetalleClient({ id }: { id: string }) {
           fecha: row.fecha ? String(row.fecha) : null,
           faena: row.faena ? String(row.faena) : null,
           patente: row.patente ? String(row.patente) : null,
+          guiaDespachoSii: row.guia_despacho_sii ? String(row.guia_despacho_sii) : null,
           clienteNombre: getClienteNombre(row.clientes),
         };
 
@@ -130,6 +133,11 @@ export default function GuiaDetalleClient({ id }: { id: string }) {
           <div>
             <div className="muted">Faena</div>
             <div style={{ fontWeight: 900 }}>{guia.faena ?? "-"}</div>
+          </div>
+
+          <div>
+            <div className="muted">Guía de Despacho SII</div>
+            <div style={{ fontWeight: 900 }}>{guia.guiaDespachoSii ?? "-"}</div>
           </div>
         </div>
       </div>

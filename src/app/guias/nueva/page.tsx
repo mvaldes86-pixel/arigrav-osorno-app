@@ -252,6 +252,7 @@ export default function NuevaGuiaPage() {
   const [valorFlete, setValorFlete] = useState<string>("");
   const [faena, setFaena] = useState("");
   const [ordenCompra, setOrdenCompra] = useState("");
+  const [guiaDespachoSii, setGuiaDespachoSii] = useState("");
   const [chofer, setChofer] = useState("");
   const [patente, setPatente] = useState("");
 
@@ -493,6 +494,7 @@ export default function NuevaGuiaPage() {
         valor_flete: Number(toNumberSafe(valorFlete).toFixed(2)),
         faena: normalizeText(faena),
         orden_compra: normalizeText(ordenCompra),
+        guia_despacho_sii: normalizeText(guiaDespachoSii) || null,
         chofer: normalizeText(chofer),
         patente: normalizeText(patente).toUpperCase(),
         medio_pago: medioPago,
@@ -745,12 +747,12 @@ export default function NuevaGuiaPage() {
             </div>
 
             <div style={styles.field}>
-              <div style={styles.label}>Patente camión / vehículo</div>
+              <div style={styles.label}>Guía de Despacho SII</div>
               <input
-                style={{ ...styles.input, visibility: "hidden" }}
-                placeholder=""
-                value=""
-                readOnly
+                style={styles.input}
+                placeholder="N° folio SII (opcional)"
+                value={guiaDespachoSii}
+                onChange={(e) => setGuiaDespachoSii(e.target.value)}
               />
             </div>
           </div>

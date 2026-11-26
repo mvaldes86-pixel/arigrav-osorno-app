@@ -7,6 +7,7 @@ type Guia = {
   fecha: string | null;
   faena: string | null;
   orden_compra: string | null;
+  guia_despacho_sii: string | null;
   chofer: string | null;
   patente: string | null;
   medio_pago: string | null;
@@ -46,7 +47,7 @@ export default async function PrintTicketPage({
 
   const { data: guia, error: guiaErr } = await supabase
     .from("guias")
-    .select("id, numero, fecha, faena, orden_compra, chofer, patente, medio_pago, clientes(nombre)")
+    .select("id, numero, fecha, faena, orden_compra, guia_despacho_sii, chofer, patente, medio_pago, clientes(nombre)")
     .eq("id", id)
     .single();
 
@@ -120,6 +121,14 @@ export default async function PrintTicketPage({
                 <span className="ticketLabel">OC:</span> {g.orden_compra ?? "-"}
               </div>
             </div>
+
+            {g.guia_despacho_sii ? (
+              <div className="ticketRow">
+                <div>
+                  <span className="ticketLabel">Guía Despacho SII:</span> {g.guia_despacho_sii}
+                </div>
+              </div>
+            ) : null}
 
             <div className="ticketDash" />
 

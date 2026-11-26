@@ -16,6 +16,7 @@ type GuiaRow = {
   valor_flete: number | null;
   faena: string | null;
   orden_compra: string | null;
+  guia_despacho_sii: string | null;
   chofer: string | null;
   patente: string | null;
   medio_pago: string | null;
@@ -255,6 +256,7 @@ export default function EditarGuiaPage() {
   const [valorFlete, setValorFlete] = useState("");
   const [faena, setFaena] = useState("");
   const [ordenCompra, setOrdenCompra] = useState("");
+  const [guiaDespachoSii, setGuiaDespachoSii] = useState("");
   const [chofer, setChofer] = useState("");
   const [patente, setPatente] = useState("");
   const [medioPago, setMedioPago] = useState("CREDITO");
@@ -295,6 +297,7 @@ export default function EditarGuiaPage() {
       setValorFlete(String(guia.valor_flete ?? ""));
       setFaena(guia.faena ?? "");
       setOrdenCompra(guia.orden_compra ?? "");
+      setGuiaDespachoSii(guia.guia_despacho_sii ?? "");
       setChofer(guia.chofer ?? "");
       setPatente(guia.patente ?? "");
       setMedioPago(guia.medio_pago ?? "CREDITO");
@@ -361,6 +364,7 @@ export default function EditarGuiaPage() {
         valor_flete: Number(toNumberSafe(valorFlete).toFixed(2)),
         faena: normalizeText(faena),
         orden_compra: normalizeText(ordenCompra),
+        guia_despacho_sii: normalizeText(guiaDespachoSii) || null,
         chofer: normalizeText(chofer),
         patente: normalizeText(patente).toUpperCase(),
         medio_pago: medioPago,
@@ -568,6 +572,16 @@ export default function EditarGuiaPage() {
           </div>
 
           <div style={{ ...styles.grid2, marginTop: 14 }}>
+            <div style={styles.field}>
+              <div style={styles.label}>Guía de Despacho SII</div>
+              <input
+                style={styles.input}
+                placeholder="N° folio SII (opcional)"
+                value={guiaDespachoSii}
+                onChange={(e) => setGuiaDespachoSii(e.target.value)}
+              />
+            </div>
+
             <div style={styles.field}>
               <div style={styles.label}>Total actual</div>
               <input style={styles.input} value={formatCLP(total)} readOnly />
